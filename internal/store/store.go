@@ -49,6 +49,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.ensureDashboardSchema(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
@@ -227,7 +231,6 @@ func (s *Store) SaveQuota(
 
 	defer tx.Rollback()
 
-	// Snapshot đầy đủ mới.
 	_, err = tx.ExecContext(
 		ctx,
 		`
@@ -250,7 +253,6 @@ DO UPDATE SET
 		return err
 	}
 
-	// Vẫn ghi bảng cũ để backward compatibility.
 	var reset any
 
 	if q.ResetAt != nil {
@@ -297,8 +299,6 @@ func (s *Store) LatestQuota(
 	ctx context.Context,
 ) (quota.Snapshot, error) {
 	var q quota.Snapshot
-
-	// Ưu tiên snapshot v2.
 	var raw string
 
 	err := s.db.QueryRowContext(
@@ -328,7 +328,6 @@ WHERE singleton = 1
 		return q, err
 	}
 
-	// Fallback DB cũ.
 	var reset sql.NullInt64
 	var hard, soft, resume int
 	var observed int64
@@ -494,9 +493,6 @@ func (s *Store) QueueResume(
 
 	state := domain.TaskState(stateRaw)
 
-	// Idempotency:
-	// nếu task đã RESUME_QUEUED và action vẫn pending,
-	// trả action hiện tại, không tạo duplicate.
 	if state == domain.StateResumeQueued {
 		var (
 			a         Action
@@ -531,9 +527,6 @@ func (s *Store) QueueResume(
 			return a, nil
 		}
 
-		// Có thể là state cũ bị crash sau khi transition
-		// nhưng trước khi insert action.
-		// Ta repair bằng cách insert action bên dưới.
 		if !errors.Is(err, sql.ErrNoRows) {
 			return Action{}, err
 		}
@@ -675,7 +668,6 @@ func (s *Store) CompleteAction(
 		return err
 	}
 
-	// Ack duplicate => no-op.
 	if status != "pending" {
 		return tx.Commit()
 	}
@@ -702,7 +694,6 @@ func (s *Store) CompleteAction(
 		return err
 	}
 
-	// pause_notice chỉ cần acknowledge.
 	if kind != "resume" {
 		return tx.Commit()
 	}
@@ -729,8 +720,6 @@ func (s *Store) CompleteAction(
 
 	from := domain.TaskState(currentState)
 
-	// Task đã được thay đổi bởi user/process khác.
-	// Không được force state.
 	if from != domain.StateResumeQueued {
 		return tx.Commit()
 	}
