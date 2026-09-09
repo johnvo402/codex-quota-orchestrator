@@ -6,9 +6,7 @@ For a packaged GitHub release:
 
 - Codex CLI installed and logged in with ChatGPT
 - Codex Desktop
-- Windows PowerShell 5.1+ or PowerShell 7+
-
-For source builds, Go 1.23+ is also required.
+- Windows 10/11 x64
 
 Verify:
 
@@ -16,102 +14,64 @@ Verify:
 codex --version
 ```
 
-For source builds:
+Go is only required when building from source.
 
-```powershell
-go version
-```
+## Install from GitHub Release
 
-## Install
-
-Download the latest Windows x64 ZIP from GitHub Releases, extract it, then open PowerShell in the extracted folder and run:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install-windows.ps1
-```
-
-The installer installs stable copies of the binaries here:
+1. Download the latest `codex-quota-orchestrator-<version>-windows-x64.zip` from GitHub Releases.
+2. Extract the ZIP.
+3. Double-click:
 
 ```text
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator.exe
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orch.exe
-%LOCALAPPDATA%\CodexQuotaGuard\bin\desktop-companion.exe
+CodexQuotaGuardSetup.exe
 ```
 
-It also adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current user's PATH. Open a new terminal after installation and use the short CLI name:
+4. Confirm installation.
+5. Fully quit and reopen Codex Desktop once so it reloads the MCP companion.
+6. Open a new terminal and verify:
 
 ```powershell
 orch status
 orch ui
-orch doctor
-orch list
-orch version
 ```
 
-It then:
+No PowerShell installer script is required.
 
-- registers `desktop-quota-guard` through `codex mcp add` using the installed companion path;
-- adds or updates the marked Quota Guard block in `~/.codex/AGENTS.md`;
-- creates the relay executor thread if one is not already persisted;
-- creates the per-user Scheduled Task `Codex Desktop Quota Guard`;
-- starts the daemon immediately.
+## What setup installs
 
-The default local state remains under:
+Stable files are copied to:
+
+```text
+%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator.exe
+%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator-daemon.exe
+%LOCALAPPDATA%\CodexQuotaGuard\bin\orch.exe
+%LOCALAPPDATA%\CodexQuotaGuard\bin\desktop-companion.exe
+%LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
+```
+
+Setup also:
+
+- adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current user's PATH;
+- registers the `desktop-quota-guard` MCP companion through Codex CLI;
+- adds/updates the managed Quota Guard block in `~/.codex/AGENTS.md`;
+- initializes the relay thread when it does not exist;
+- registers background startup through the current user's Windows Run key;
+- registers **Codex Desktop Quota Guard** in Windows Installed Apps;
+- starts `orchestrator-daemon.exe` immediately in the background.
+
+The daemon binary is built with the Windows GUI subsystem and is launched with `CREATE_NO_WINDOW`, so normal background startup does not keep a terminal window open.
+
+## Data directory
+
+Runtime state remains separate from installed binaries:
 
 ```text
 ~\.codex-desktop-quota-guard\
 ```
 
-This keeps SQLite state and relay configuration separate from installed binaries, so reinstalling or upgrading does not wipe task history.
+This contains SQLite state and relay configuration. Reinstalling/upgrading keeps this directory.
 
-Fully quit Codex Desktop and reopen it after installation so the Desktop app reloads the MCP configuration.
-
-### Installer options
-
-```powershell
-.\scripts\install-windows.ps1 -SkipRelayInit
-.\scripts\install-windows.ps1 -SkipAgentInstructions
-.\scripts\install-windows.ps1 -SkipAutoStart
-.\scripts\install-windows.ps1 -SkipPath
-.\scripts\install-windows.ps1 -ForceBuild
-```
-
-`-ForceBuild` is intended for source development. A release package already contains the Windows binaries.
-
-## Autostart
-
-There are two complementary startup paths.
-
-First, the installer creates this per-user Scheduled Task:
-
-```text
-Codex Desktop Quota Guard
-```
-
-It runs the daemon when you sign in to Windows. Inspect it with:
-
-```powershell
-Get-ScheduledTask -TaskName 'Codex Desktop Quota Guard'
-```
-
-Start it manually if needed:
-
-```powershell
-Start-ScheduledTask -TaskName 'Codex Desktop Quota Guard'
-```
-
-Second, when Codex Desktop launches `desktop-companion.exe`, the companion checks `http://127.0.0.1:47631/healthz`. If the daemon is not healthy, it starts the installed sibling `orchestrator.exe daemon` automatically. This means opening Codex Desktop can recover the daemon even if the logon Scheduled Task did not start it.
-
-The Scheduled Task uses `MultipleInstances IgnoreNew`, and the daemon itself also has single-instance behavior by listen address. Starting it twice is safe when the existing process is a healthy Quota Guard daemon:
-
-```powershell
-orch daemon
-```
-
-The second invocation reports that the daemon is already running and exits successfully.
-
-## Everyday operation
+## Everyday commands
 
 Open dashboard:
 
@@ -125,65 +85,113 @@ Overall status:
 orch status
 ```
 
-List tracked Desktop tasks:
+Tracked tasks:
 
 ```powershell
 orch list
 ```
 
-Check account/rate-limit diagnostics:
+Quota/account diagnostics:
 
 ```powershell
 orch doctor
 ```
 
-Show installed version:
+Installed version:
 
 ```powershell
 orch version
 ```
 
-If `orch` is not recognized immediately after installation, close and reopen PowerShell/Windows Terminal so it receives the updated User PATH.
+If `orch` is not recognized immediately after installation, open a new PowerShell/Windows Terminal session so it receives the updated User PATH.
 
-`doctor` runs outside the Codex Desktop process tree, so it intentionally does not claim native Desktop-pipe reachability. Use the MCP tool `desktop_guard_status` from inside a Desktop task to validate native delivery.
+## Background startup
 
-## Pause/resume behavior
+There are two complementary startup paths.
 
-When quota becomes low, `quota_check` returns `action=pause`.
+### Windows login
 
-The expected cooperative flow is:
-
-```text
-RUNNING
-→ PAUSE_REQUESTED
-→ checkpoint
-→ PAUSED_QUOTA
-```
-
-When both relevant quota windows are usable again:
+Setup writes a per-user startup entry for:
 
 ```text
-PAUSED_QUOTA
-→ RESUME_QUEUED
-→ native Desktop send
-→ RUNNING
+%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator-daemon.exe daemon
 ```
 
-The continuation is sent to the same Codex Desktop thread through the native Desktop tools pipe.
+This starts the daemon after you sign in without a visible console window.
 
-## Manual recovery
+### Codex Desktop fallback
 
-A task can become `NEEDS_REVIEW` when a native resume send was attempted but its outcome cannot be proven. First inspect the destination thread, then choose:
+When Codex Desktop launches `desktop-companion.exe`, the companion checks:
+
+```text
+http://127.0.0.1:47631/healthz
+```
+
+If the daemon is not healthy, it starts `orchestrator-daemon.exe` itself with no console window. The daemon still has single-instance behavior by listen address.
+
+## Upgrade
+
+Download/extract the newer release and double-click:
+
+```text
+CodexQuotaGuardSetup.exe
+```
+
+Setup behaves as install-or-upgrade. It removes old launcher registrations, stops old installed processes, replaces binaries, refreshes MCP/PATH/startup registration, preserves local state, and starts the new daemon.
+
+If Codex Desktop currently has `desktop-companion.exe` open, setup attempts to stop the installed companion before replacing it. If Windows still reports a locked file, fully quit Codex Desktop and run setup again.
+
+## Uninstall
+
+### Windows Settings
+
+Open:
+
+```text
+Settings
+→ Apps
+→ Installed apps
+→ Codex Desktop Quota Guard
+→ Uninstall
+```
+
+### Direct EXE
+
+You can also double-click:
+
+```text
+%LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
+```
+
+The uninstaller removes:
+
+- MCP registration;
+- User PATH entry;
+- Windows background startup entry;
+- old Scheduled Task registrations from earlier releases;
+- managed `AGENTS.md` block;
+- installed binaries;
+- Windows Installed Apps registration.
+
+By default, task history/state is preserved.
+
+During interactive uninstall you can choose whether to also remove:
+
+```text
+~\.codex-desktop-quota-guard\
+```
+
+For unattended uninstall:
 
 ```powershell
-orch recover --thread <threadId> --resolution retry
-orch recover --thread <threadId> --resolution running
-orch recover --thread <threadId> --resolution cancel
+"$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent
 ```
 
-Use `retry` only when you confirmed that the previous continuation did not arrive.
+To also delete local state:
 
-See `TROUBLESHOOTING.md` for details.
+```powershell
+"$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent --purge-data
+```
 
 ## Configuration
 
@@ -198,42 +206,15 @@ quota poll:      60s
 companion poll:  5s
 ```
 
-Thresholds must satisfy:
-
-```text
-0 <= hard < soft < resume <= 100
-```
-
-Copy `config.example.json` and pass it with `--config` for manual runs, or use the supported `CDQG_*` environment variables.
-
-## Upgrade
-
-For a new release, extract the new ZIP and run the installer again:
+Manual CLI commands still support `--config`, for example:
 
 ```powershell
-.\scripts\install-windows.ps1
+orch status --config C:\path\to\config.json
+orch daemon --config C:\path\to\config.json
 ```
 
-It replaces the installed binaries, refreshes the MCP registration, PATH entry and Scheduled Task, and preserves `~/.codex-desktop-quota-guard` state.
-
-Restart Codex Desktop after the upgrade.
-
-## Uninstall
-
-Remove the Scheduled Task, MCP registration, managed AGENTS block, User PATH entry and installed binaries while keeping local task state:
-
-```powershell
-.\scripts\uninstall-windows.ps1
-```
-
-Also delete SQLite state and relay configuration:
-
-```powershell
-.\scripts\uninstall-windows.ps1 -PurgeData
-```
-
-Open a new terminal after uninstall so the removed PATH entry disappears from your shell.
+The standard EXE installer currently configures background startup with the default config/environment. If a custom background config is required, prefer supported `CDQG_*` user environment variables until installer-level config selection is added.
 
 ## Important limitation
 
-This version does not claim a stable hard-interrupt API for arbitrary active Codex Desktop turns. `PAUSE_REQUESTED` is cooperative and should not be treated as a safety boundary for destructive operations.
+Pause remains cooperative at model/tool safe boundaries. The project does not claim a stable hard-interrupt API for arbitrary active Codex Desktop turns.
