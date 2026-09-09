@@ -4,12 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"codex-desktop-quota-guard/internal/config"
 )
-
-var errDaemonRestart = errors.New("daemon restart requested")
 
 func restartDaemon(cfg config.Config) error {
 	oldBase, err := requestDaemonRestart(cfg)
@@ -27,7 +26,8 @@ func restartDaemon(cfg config.Config) error {
 		time.Sleep(150 * time.Millisecond)
 	}
 
-	newCfg, err := config.Load(cfg.ConfigPath())
+	path := existingConfigPath(cfg)
+	newCfg, err := config.Load(path)
 	if err != nil {
 		return fmt.Errorf("reload saved config: %w", err)
 	}
@@ -73,6 +73,14 @@ func requestDaemonRestart(cfg config.Config) (string, error) {
 		lastErr = errors.New("daemon is not reachable")
 	}
 	return "", fmt.Errorf("request daemon restart: %w", lastErr)
+}
+
+func existingConfigPath(cfg config.Config) string {
+	path := cfg.ConfigPath()
+	if _, err := os.Stat(path); err == nil {
+		return path
+	}
+	return ""
 }
 
 func healthyURL(url string) bool {
