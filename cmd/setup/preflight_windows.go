@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -17,19 +18,6 @@ const (
 	mbRetryCancel = 0x00000005
 	idRetry       = 4
 )
-
-func init() {
-	action, silent, _ := parseAction()
-	if action != "install" {
-		return
-	}
-	if err := waitForCompanionExit(silent); err != nil {
-		if !silent {
-			messageBox(err.Error(), appName+" - Setup", mbOK|mbIconError)
-		}
-		os.Exit(1)
-	}
-}
 
 func normalizedVersion(v string) string {
 	v = strings.TrimSpace(v)
@@ -68,7 +56,6 @@ func waitForCompanionExit(silent bool) error {
 	for {
 		running, err := imageRunning("desktop-companion.exe")
 		if err != nil {
-			// Do not block setup solely because tasklist could not be queried.
 			return nil
 		}
 		if !running {
@@ -95,6 +82,39 @@ func imageRunning(image string) (bool, error) {
 	}
 	needle := `"` + strings.ToLower(image) + `"`
 	return strings.Contains(strings.ToLower(out), needle), nil
+}
+
+func checkPackage() error {
+	p, err := resolvePaths()
+	if err != nil {
+		return err
+	}
+	for _, required := range []string{
+		p.setupSource,
+		p.orchSource,
+		p.daemonSource,
+		p.companionSource,
+		filepath.Join(p.packageRoot, "README.md"),
+		filepath.Join(p.packageRoot, "config.example.json"),
+		filepath.Join(p.packageRoot, "docs", "WINDOWS_SETUP.md"),
+	} {
+		info, err := os.Stat(required)
+		if err != nil {
+			return fmt.Errorf("package self-check: missing %s: %w", required, err)
+		}
+		if info.IsDir() || info.Size() == 0 {
+			return fmt.Errorf("package self-check: invalid file %s", required)
+		}
+	}
+
+	out, err := runExecutable(p.orchSource, "version")
+	if err != nil {
+		return fmt.Errorf("package self-check: orchestrator version: %w\n%s", err, out)
+	}
+	if normalizedVersion(out) != normalizedVersion(version) {
+		return fmt.Errorf("package self-check: version mismatch: setup=%s orchestrator=%s", normalizedVersion(version), normalizedVersion(out))
+	}
+	return nil
 }
 
 func waitForDaemonHealth(timeout time.Duration) error {
