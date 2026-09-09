@@ -104,6 +104,10 @@ func (s *Server) diagnostics(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
+	if r.Header.Get("X-CDQG-Control") != "diagnostics" {
+		httpErr(w, http.StatusForbidden, errors.New("diagnostics control header required"))
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
 	defer cancel()
 	jsonOut(w, http.StatusOK, diagnostics.Run(ctx, s.service.cfg))
