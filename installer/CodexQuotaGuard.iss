@@ -104,7 +104,7 @@ begin
     Exit;
   if (CurrentPath <> '') and (CurrentPath[Length(CurrentPath)] <> ';') then
     CurrentPath := CurrentPath + ';';
-  RegWriteStringValue(HKCU, EnvironmentKey, PathValueName, CurrentPath + Entry);
+  RegWriteExpandStringValue(HKCU, EnvironmentKey, PathValueName, CurrentPath + Entry);
 end;
 
 procedure RemoveFromUserPath(Entry: string);
@@ -127,7 +127,7 @@ begin
       NewPath := NewPath + Trim(Parts[I]);
     end;
   end;
-  RegWriteStringValue(HKCU, EnvironmentKey, PathValueName, NewPath);
+  RegWriteExpandStringValue(HKCU, EnvironmentKey, PathValueName, NewPath);
 end;
 
 procedure ConfigureCodexIntegration;
