@@ -2,11 +2,11 @@
 
 ## Prerequisites
 
-For a packaged GitHub release:
+For a packaged release:
 
-- Codex CLI installed and logged in with ChatGPT
-- Codex Desktop
 - Windows 10/11 x64
+- Codex Desktop
+- Codex CLI installed and logged in
 
 Verify:
 
@@ -14,7 +14,7 @@ Verify:
 codex --version
 ```
 
-Go is only required when building from source.
+Go is only required for source development.
 
 ## Install from GitHub Release
 
@@ -35,117 +35,102 @@ orch status
 orch ui
 ```
 
-No PowerShell installer script is required.
+No PowerShell installer and no execution-policy change are required.
 
 ## What setup installs
 
-Stable files are copied to:
-
 ```text
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator.exe
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator-daemon.exe
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orch.exe
-%LOCALAPPDATA%\CodexQuotaGuard\bin\desktop-companion.exe
-%LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
+%LOCALAPPDATA%\CodexQuotaGuard\
+├─ Uninstall.exe
+└─ bin\
+   ├─ orchestrator.exe
+   ├─ orchestrator-daemon.exe
+   ├─ orch.exe
+   └─ desktop-companion.exe
 ```
 
 Setup also:
 
-- adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current user's PATH;
-- registers the `desktop-quota-guard` MCP companion through Codex CLI;
+- adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current User PATH;
+- registers `desktop-quota-guard` through Codex CLI;
 - adds/updates the managed Quota Guard block in `~/.codex/AGENTS.md`;
-- initializes the relay thread when it does not exist;
-- registers background startup through the current user's Windows Run key;
+- initializes the relay when needed;
+- registers per-user background startup through the Windows Run key;
 - registers **Codex Desktop Quota Guard** in Windows Installed Apps;
 - starts `orchestrator-daemon.exe` immediately in the background.
 
-The daemon binary is built with the Windows GUI subsystem and is launched with `CREATE_NO_WINDOW`, so normal background startup does not keep a terminal window open.
+The daemon is built with the Windows GUI subsystem and background child processes use `CREATE_NO_WINDOW`, so normal operation should not keep or periodically flash terminal windows.
 
-## Data directory
+## Runtime data
 
-Runtime state remains separate from installed binaries:
+State is kept separately from installed binaries:
 
 ```text
 ~\.codex-desktop-quota-guard\
 ```
 
-This contains SQLite state and relay configuration. Reinstalling/upgrading keeps this directory.
+This includes SQLite task history and relay state. Normal reinstall/upgrade preserves it.
 
-## Everyday commands
+## Upgrade / repair
 
-Open dashboard:
-
-```powershell
-orch ui
-```
-
-Overall status:
-
-```powershell
-orch status
-```
-
-Tracked tasks:
-
-```powershell
-orch list
-```
-
-Quota/account diagnostics:
-
-```powershell
-orch doctor
-```
-
-Installed version:
-
-```powershell
-orch version
-```
-
-If `orch` is not recognized immediately after installation, open a new PowerShell/Windows Terminal session so it receives the updated User PATH.
-
-## Background startup
-
-There are two complementary startup paths.
-
-### Windows login
-
-Setup writes a per-user startup entry for:
-
-```text
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator-daemon.exe daemon
-```
-
-This starts the daemon after you sign in without a visible console window.
-
-### Codex Desktop fallback
-
-When Codex Desktop launches `desktop-companion.exe`, the companion checks:
-
-```text
-http://127.0.0.1:47631/healthz
-```
-
-If the daemon is not healthy, it starts `orchestrator-daemon.exe` itself with no console window. The daemon still has single-instance behavior by listen address.
-
-## Upgrade
-
-Download/extract the newer release and double-click:
+Download/extract the newer release and double-click its:
 
 ```text
 CodexQuotaGuardSetup.exe
 ```
 
-Setup behaves as install-or-upgrade. It removes old launcher registrations, stops old installed processes, replaces binaries, refreshes MCP/PATH/startup registration, preserves local state, and starts the new daemon.
+Before modifying the existing installation, setup checks whether Codex Desktop is still using `desktop-companion.exe`.
 
-If Codex Desktop currently has `desktop-companion.exe` open, setup attempts to stop the installed companion before replacing it. If Windows still reports a locked file, fully quit Codex Desktop and run setup again.
+If it is, setup asks you to:
+
+```text
+Fully quit Codex Desktop
+→ click Retry
+```
+
+This preflight happens before replacing installed files, preventing the previous partial-upgrade/file-lock failure mode.
+
+Setup then refreshes binaries, MCP registration, PATH, startup registration and Windows uninstall metadata while preserving runtime state.
+
+## Everyday commands
+
+```powershell
+orch status
+orch ui
+orch list
+orch doctor
+orch version
+```
+
+Dashboard:
+
+```text
+http://127.0.0.1:47631/
+```
+
+If `orch` is not recognized immediately after installation, open a new terminal so it receives the updated User PATH.
+
+## Background startup
+
+At Windows login, the installer starts:
+
+```text
+%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator-daemon.exe daemon
+```
+
+through the current user's Windows Run key.
+
+When Codex Desktop launches `desktop-companion.exe`, the companion also checks:
+
+```text
+http://127.0.0.1:47631/healthz
+```
+
+and starts the hidden daemon if it is not already healthy.
 
 ## Uninstall
 
 ### Windows Settings
-
-Open:
 
 ```text
 Settings
@@ -157,40 +142,26 @@ Settings
 
 ### Direct EXE
 
-You can also double-click:
+Double-click:
 
 ```text
 %LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
 ```
 
-The uninstaller removes:
+The uninstaller removes MCP registration, User PATH, background startup, legacy Scheduled Task registrations, the managed `AGENTS.md` block, installed binaries and the Installed Apps entry.
 
-- MCP registration;
-- User PATH entry;
-- Windows background startup entry;
-- old Scheduled Task registrations from earlier releases;
-- managed `AGENTS.md` block;
-- installed binaries;
-- Windows Installed Apps registration.
+By default runtime data is preserved. Interactive uninstall asks whether to purge it too.
 
-By default, task history/state is preserved.
-
-During interactive uninstall you can choose whether to also remove:
-
-```text
-~\.codex-desktop-quota-guard\
-```
-
-For unattended uninstall:
+Silent uninstall:
 
 ```powershell
-"$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent
+& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent
 ```
 
-To also delete local state:
+Silent uninstall plus data purge:
 
 ```powershell
-"$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent --purge-data
+& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent --purge-data
 ```
 
 ## Configuration
@@ -206,14 +177,18 @@ quota poll:      60s
 companion poll:  5s
 ```
 
-Manual CLI commands still support `--config`, for example:
+Manual CLI commands support `--config`, for example:
 
 ```powershell
 orch status --config C:\path\to\config.json
 orch daemon --config C:\path\to\config.json
 ```
 
-The standard EXE installer currently configures background startup with the default config/environment. If a custom background config is required, prefer supported `CDQG_*` user environment variables until installer-level config selection is added.
+Background configuration currently uses defaults plus supported `CDQG_*` environment variables. Installer-level config selection is planned separately.
+
+## Source/development scripts
+
+Legacy PowerShell scripts may remain in the repository for development and migration testing, but release users should use `CodexQuotaGuardSetup.exe` and Windows Installed Apps / `Uninstall.exe`.
 
 ## Important limitation
 
