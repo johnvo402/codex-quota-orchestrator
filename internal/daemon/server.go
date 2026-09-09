@@ -23,14 +23,13 @@ type Server struct {
 	store   *store.Store
 	log     *slog.Logger
 	http    *http.Server
-	restart chan struct{}
 }
 
 func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{addr: addr, service: svc, store: st, log: log, restart: make(chan struct{}, 1)}
+	s := &Server{addr: addr, service: svc, store: st, log: log}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/quota", s.quota)
@@ -55,10 +54,11 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 	return s
 }
 
-func (s *Server) ListenAndServe() error              { return s.http.ListenAndServe() }
-func (s *Server) Serve(listener net.Listener) error  { return s.http.Serve(listener) }
-func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
-func (s *Server) RestartRequested() <-chan struct{}   { return s.restart }
+func (s *Server) ListenAndServe() error             { return s.http.ListenAndServe() }
+func (s *Server) Serve(listener net.Listener) error { return s.http.Serve(listener) }
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.http.Shutdown(ctx)
+}
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	jsonOut(w, http.StatusOK, map[string]any{"ok": true})
