@@ -73,6 +73,10 @@ func (s *Server) projectRoute(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 200, items)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "queue-mode" {
+		s.projectQueueMode(w, r, id)
+		return
+	}
 	if len(parts) != 1 {
 		http.NotFound(w, r)
 		return
