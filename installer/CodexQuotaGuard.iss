@@ -37,6 +37,10 @@ VersionInfoDescription={#AppName} Setup
 VersionInfoProductName={#AppName}
 VersionInfoProductVersion={#AppVersion}
 
+[InstallDelete]
+Type: files; Name: "{app}\Uninstall.exe"
+Type: filesandordirs; Name: "{app}\.upgrade-backup"
+
 [Files]
 Source: "..\bin\orchestrator.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 Source: "..\bin\orchestrator.exe"; DestDir: "{app}\bin"; DestName: "orch.exe"; Flags: ignoreversion
@@ -49,13 +53,13 @@ Source: "..\docs\ARCHITECTURE.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 Source: "..\docs\TROUBLESHOOTING.md"; DestDir: "{app}\docs"; Flags: ignoreversion
 
 [Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexQuotaGuard"; Flags: deletekey dontcreatekey
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CodexQuotaGuard"; ValueData: "{app}\bin\orchestrator-daemon.exe daemon"; Flags: uninsdeletevalue
 
 [Icons]
 Name: "{group}\Codex Quota Guard Dashboard"; Filename: "{app}\bin\orch.exe"; Parameters: "ui"
 
 [Run]
-Filename: "{app}\bin\orch.exe"; Parameters: "setup"; StatusMsg: "Configuring Codex Desktop integration..."; Flags: runhidden waituntilterminated
 Filename: "{app}\bin\orchestrator-daemon.exe"; Parameters: "daemon"; StatusMsg: "Starting quota daemon..."; Flags: runhidden nowait
 Filename: "{app}\bin\orch.exe"; Parameters: "ui"; Description: "Open Codex Quota Guard dashboard"; Flags: postinstall nowait skipifsilent unchecked
 
@@ -126,10 +130,36 @@ begin
   RegWriteStringValue(HKCU, EnvironmentKey, PathValueName, NewPath);
 end;
 
+procedure ConfigureCodexIntegration;
+var
+  ResultCode: Integer;
+  Ok: Boolean;
+begin
+  Ok := Exec(
+    ExpandConstant('{app}\bin\orch.exe'),
+    'setup',
+    ExpandConstant('{app}\bin'),
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  if (not Ok) or (ResultCode <> 0) then
+    MsgBox(
+      'Application files were installed, but Codex integration setup did not complete.' + #13#10 + #13#10 +
+      'Make sure Codex CLI is installed and logged in, then open a new terminal and run:' + #13#10 +
+      '  orch setup',
+      mbError,
+      MB_OK
+    );
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
+  begin
     AddToUserPath(ExpandConstant('{app}\bin'));
+    ConfigureCodexIntegration;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
