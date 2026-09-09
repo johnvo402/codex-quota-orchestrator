@@ -46,3 +46,35 @@ jobs:
       - name: Vet (Windows)
         if: runner.os == 'Windows'
         run: go vet -unsafeptr=false ./...
+
+      - name: Build Windows installer inputs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          go build -trimpath -ldflags "-s -w -X main.version=ci" -o bin/orchestrator.exe ./cmd/orchestrator
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=ci" -o bin/orchestrator-daemon.exe ./cmd/orchestrator
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -ldflags "-s -w" -o bin/desktop-companion.exe ./cmd/desktop-companion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Install Inno Setup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Compile Inno Setup installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found at $iscc"
+          }
+          & $iscc "/DAppVersion=0.0.0" installer\CodexQuotaGuard.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Test-Path 'dist\CodexQuotaGuardSetup.exe')) {
+            throw 'Inno Setup did not produce dist\CodexQuotaGuardSetup.exe'
+          }
