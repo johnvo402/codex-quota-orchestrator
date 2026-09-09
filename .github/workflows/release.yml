@@ -63,6 +63,54 @@ jobs:
           Compress-Archive -Path "$package/*" -DestinationPath "$package.zip" -Force
           Get-FileHash "$package.zip" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $package.zip" } | Set-Content "$package.zip.sha256"
 
+      - name: Smoke-test assembled package
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'
+          $package = "codex-quota-orchestrator-$version-windows-x64"
+          $smoke = Join-Path $PWD "smoke-package"
+          Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive "$package.zip" -DestinationPath $smoke -Force
+
+          $required = @(
+            "CodexQuotaGuardSetup.exe",
+            "bin/orchestrator.exe",
+            "bin/orchestrator-daemon.exe",
+            "bin/desktop-companion.exe",
+            "config.example.json",
+            "README.md",
+            "docs/WINDOWS_SETUP.md",
+            "docs/ARCHITECTURE.md",
+            "docs/TROUBLESHOOTING.md"
+          )
+
+          foreach ($relative in $required) {
+            $path = Join-Path $smoke $relative
+            if (-not (Test-Path $path -PathType Leaf)) {
+              throw "Release package missing required file: $relative"
+            }
+            if ((Get-Item $path).Length -le 0) {
+              throw "Release package contains empty file: $relative"
+            }
+          }
+
+          $actualVersion = & (Join-Path $smoke "bin/orchestrator.exe") version
+          if ($LASTEXITCODE -ne 0) {
+            throw "Packaged orchestrator.exe version command failed"
+          }
+          if ($actualVersion.Trim() -ne $version) {
+            throw "Version mismatch: tag=$version packaged=$actualVersion"
+          }
+
+          $hashLine = Get-Content "$package.zip.sha256" -Raw
+          $expectedHash = ($hashLine -split '\s+')[0].Trim().ToLower()
+          $actualHash = (Get-FileHash "$package.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($expectedHash -ne $actualHash) {
+            throw "SHA256 sidecar does not match assembled ZIP"
+          }
+
+          Write-Host "Release package smoke test passed for $version"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
