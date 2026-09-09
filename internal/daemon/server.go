@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"codex-desktop-quota-guard/internal/config"
 	"codex-desktop-quota-guard/internal/domain"
 	"codex-desktop-quota-guard/internal/store"
 	"codex-desktop-quota-guard/internal/webui"
@@ -51,13 +53,24 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 	mux.HandleFunc("/v1/project-tasks/", s.projectTaskRoute)
 	mux.Handle("/", webui.Handler())
 	s.http = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	if err := config.SaveRuntime(svc.cfg.DataDir, config.DaemonRuntime{
+		ListenAddr: addr,
+		PID:        os.Getpid(),
+		StartedAt:  time.Now().UTC(),
+	}); err != nil {
+		log.Warn("save daemon runtime discovery failed", "error", err)
+	}
 	return s
 }
 
 func (s *Server) ListenAndServe() error             { return s.http.ListenAndServe() }
 func (s *Server) Serve(listener net.Listener) error { return s.http.Serve(listener) }
 func (s *Server) Shutdown(ctx context.Context) error {
-	return s.http.Shutdown(ctx)
+	err := s.http.Shutdown(ctx)
+	if cleanupErr := config.RemoveRuntimeIfPID(s.service.cfg.DataDir, os.Getpid()); cleanupErr != nil {
+		s.log.Warn("remove daemon runtime discovery failed", "error", cleanupErr)
+	}
+	return err
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
