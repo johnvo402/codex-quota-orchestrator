@@ -1,13 +1,10 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing vX.Y.Z tag to publish
+        description: Existing vX.Y.Z tag from main to publish
         required: true
         type: string
 
@@ -18,7 +15,7 @@ jobs:
   windows-release:
     runs-on: windows-latest
     env:
-      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ inputs.tag }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -26,15 +23,26 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
           fetch-depth: 0
 
-      - name: Validate release tag
+      - name: Validate release tag is from main
         shell: pwsh
         run: |
           if ($env:RELEASE_TAG -notmatch '^v\d+\.\d+\.\d+$') {
             throw "Invalid release tag: $env:RELEASE_TAG"
           }
+
+          git fetch origin main --tags --force
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Failed to fetch origin/main and tags'
+          }
+
           git rev-parse "refs/tags/$env:RELEASE_TAG" | Out-Null
           if ($LASTEXITCODE -ne 0) {
             throw "Release tag does not exist: $env:RELEASE_TAG"
+          }
+
+          git merge-base --is-ancestor "$env:RELEASE_TAG^{commit}" origin/main
+          if ($LASTEXITCODE -ne 0) {
+            throw "Release tag is not reachable from main: $env:RELEASE_TAG"
           }
 
       - name: Setup Go
