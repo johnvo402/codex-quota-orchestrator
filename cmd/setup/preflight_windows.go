@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -16,6 +17,19 @@ const (
 	mbRetryCancel = 0x00000005
 	idRetry       = 4
 )
+
+func init() {
+	action, silent, _ := parseAction()
+	if action != "install" {
+		return
+	}
+	if err := waitForCompanionExit(silent); err != nil {
+		if !silent {
+			messageBox(err.Error(), appName+" - Setup", mbOK|mbIconError)
+		}
+		os.Exit(1)
+	}
+}
 
 func normalizedVersion(v string) string {
 	v = strings.TrimSpace(v)
