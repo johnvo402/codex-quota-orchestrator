@@ -29,9 +29,17 @@ jobs:
         run: |
           $version = '${{ github.ref_name }}'
           New-Item -ItemType Directory -Force bin | Out-Null
+
           go build -trimpath -ldflags "-s -w -X main.version=$version" -o bin/orchestrator.exe ./cmd/orchestrator
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$version" -o bin/orchestrator-daemon.exe ./cmd/orchestrator
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
           go build -trimpath -ldflags "-s -w" -o bin/desktop-companion.exe ./cmd/desktop-companion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$version" -o CodexQuotaGuardSetup.exe ./cmd/setup
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Assemble package
@@ -40,18 +48,18 @@ jobs:
           $version = '${{ github.ref_name }}'
           $package = "codex-quota-orchestrator-$version-windows-x64"
           New-Item -ItemType Directory -Force "$package/bin" | Out-Null
-          New-Item -ItemType Directory -Force "$package/scripts" | Out-Null
           New-Item -ItemType Directory -Force "$package/docs" | Out-Null
+
+          Copy-Item CodexQuotaGuardSetup.exe "$package/"
           Copy-Item bin/orchestrator.exe "$package/bin/"
+          Copy-Item bin/orchestrator-daemon.exe "$package/bin/"
           Copy-Item bin/desktop-companion.exe "$package/bin/"
-          Copy-Item scripts/install-windows.ps1 "$package/scripts/"
-          Copy-Item scripts/uninstall-windows.ps1 "$package/scripts/"
-          Copy-Item scripts/start-daemon.ps1 "$package/scripts/"
           Copy-Item config.example.json "$package/"
           Copy-Item README.md "$package/"
           Copy-Item docs/WINDOWS_SETUP.md "$package/docs/"
           Copy-Item docs/ARCHITECTURE.md "$package/docs/"
           Copy-Item docs/TROUBLESHOOTING.md "$package/docs/"
+
           Compress-Archive -Path "$package/*" -DestinationPath "$package.zip" -Force
           Get-FileHash "$package.zip" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $package.zip" } | Set-Content "$package.zip.sha256"
 
