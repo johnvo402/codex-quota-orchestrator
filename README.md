@@ -13,7 +13,8 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Native Windows Desktop `send_message_to_thread` delivery.
 - Crash-safe action claiming and `NEEDS_REVIEW` recovery.
 - Project/workspace grouping and sequential project task queues.
-- Embedded local dashboard with task/project management.
+- Embedded local dashboard with task/project management and Settings.
+- Shared persisted configuration for daemon, companion, and CLI.
 - `orch` CLI installed on the current user's PATH.
 - Inno Setup based Windows installer/uninstaller.
 - Hidden Windows background daemon with per-user autostart.
@@ -73,7 +74,7 @@ Inno Setup uses the Windows Restart Manager for files that are currently in use 
 ~\.codex-desktop-quota-guard\
 ```
 
-including SQLite task history and relay state.
+including SQLite task history, relay state, and the shared `config.json` when it exists.
 
 If Codex integration ever needs to be repaired manually:
 
@@ -107,13 +108,16 @@ orch teardown
 
 which removes the `desktop-quota-guard` MCP registration and the managed Quota Guard block from `AGENTS.md`.
 
-Runtime state under `~\.codex-desktop-quota-guard\` is intentionally preserved so reinstall/upgrade does not destroy task history.
+Runtime state under `~\.codex-desktop-quota-guard\` is intentionally preserved so reinstall/upgrade does not destroy task history or settings.
 
 ## Everyday commands
 
 ```powershell
 orch setup
 orch teardown
+orch config show
+orch config path
+orch config validate
 orch status
 orch ui
 orch list
@@ -133,6 +137,52 @@ Task Queue:
 http://127.0.0.1:47631/queue.html
 ```
 
+Settings:
+
+```text
+http://127.0.0.1:47631/settings.html
+```
+
+## Shared configuration
+
+With no explicit `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and `orch` CLI all resolve the same optional file:
+
+```text
+~\.codex-desktop-quota-guard\config.json
+```
+
+Existing installs do not need this file. Defaults remain active until Settings is saved for the first time.
+
+The dashboard exposes:
+
+```text
+Settings
+├─ hard / soft / resume thresholds
+├─ quota poll interval
+├─ companion poll interval
+├─ Codex request timeout
+├─ project queue auto-dispatch
+└─ listen address
+```
+
+Settings are validated and persisted through:
+
+```text
+GET /v1/settings
+PUT /v1/settings
+```
+
+Writes use a temporary file and replace `config.json` only after the new content is fully written. Changes currently require restarting the quota daemon; reopen Codex Desktop as well so its companion reloads the same config.
+
+Explicit configuration remains supported:
+
+```powershell
+orch status --config C:\path\to\config.json
+orch config --config C:\path\to\config.json show
+```
+
+`CDQG_CONFIG`, `CDQG_DATA_DIR`, and `CDQG_CODEX_COMMAND` remain available for advanced/development overrides.
+
 ## Sequential project task queue
 
 Each project has an independent FIFO-style queue.
@@ -147,7 +197,7 @@ QUEUED   Add GitHub Actions integration
 QUEUED   Improve README examples
 ```
 
-When the current task calls `task_complete`, the daemon checks quota and project state. If quota is healthy, it dispatches the next queued task through the same crash-safe native delivery pipeline.
+When the current task calls `task_complete`, the daemon checks quota and project state. If quota is healthy and `autoDispatch` is enabled, it dispatches the next queued task through the same crash-safe native delivery pipeline.
 
 Safety rules:
 
@@ -155,6 +205,7 @@ Safety rules:
 - the queue advances only after `COMPLETED`;
 - `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` stop automatic advancement;
 - low quota keeps future work queued;
+- disabling `autoDispatch` leaves queued work waiting;
 - uncertain delivery becomes `NEEDS_REVIEW` instead of being blindly retried.
 
 Lifecycle:
@@ -185,27 +236,27 @@ soft threshold: 10%
 resume:          20%
 quota poll:      60s
 companion poll:   5s
+auto dispatch:   true
 ```
-
-Manual commands support `--config`, and background configuration can also use supported `CDQG_*` environment variables.
 
 ## Project layout
 
 ```text
 cmd/
-  orchestrator/       daemon + CLI + Codex bootstrap commands
+  orchestrator/       daemon + CLI + Codex bootstrap/config commands
   desktop-companion/  MCP server launched by Codex Desktop
 installer/
   CodexQuotaGuard.iss Inno Setup definition
 internal/
   codexquota/         short-lived Codex app-server quota client
+  config/             shared config resolution, validation, persistence
   daemon/             monitor + API + queue scheduler
   desktop/            native Desktop delivery
   mcpserver/          MCP tools + action delivery
   store/              SQLite persistence
   domain/             task/project/queue models
   quota/              policy
-  webui/              embedded dashboard
+  webui/              embedded dashboard, queue, and Settings UI
 .github/workflows/
   ci.yml
   release.yml
@@ -215,7 +266,7 @@ Legacy PowerShell scripts may remain in the source tree for development/migratio
 
 ## Docs
 
-- `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, background startup, and uninstall.
+- `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, background startup, configuration, and uninstall.
 - `docs/TROUBLESHOOTING.md` — daemon, native delivery, and recovery diagnostics.
 - `docs/ARCHITECTURE.md` — Desktop-first architecture.
 
