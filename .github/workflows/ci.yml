@@ -40,4 +40,9 @@ jobs:
         run: go test ./...
 
       - name: Vet
+        if: runner.os != 'Windows'
         run: go vet ./...
+
+      - name: Vet (Windows)
+        if: runner.os == 'Windows'
+        run: go vet -unsafeptr=false ./...
