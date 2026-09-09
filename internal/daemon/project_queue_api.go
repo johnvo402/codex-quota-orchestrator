@@ -55,18 +55,36 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 	}
 	parts := strings.Split(path, "/")
 	id := parts[0]
-	if len(parts) == 2 && parts[1] == "cancel" {
-		if r.Method != http.MethodPost {
-			w.WriteHeader(http.StatusMethodNotAllowed)
+	if len(parts) == 2 {
+		switch parts[1] {
+		case "cancel":
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			item, err := s.store.CancelProjectTask(r.Context(), id)
+			if err != nil {
+				httpErr(w, http.StatusConflict, err)
+				return
+			}
+			jsonOut(w, http.StatusOK, item)
+			return
+		case "start":
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			item, err := s.service.StartProjectQueueItem(r.Context(), id)
+			if err != nil {
+				httpErr(w, queueStatus(err), err)
+				return
+			}
+			jsonOut(w, http.StatusOK, item)
+			return
+		default:
+			http.NotFound(w, r)
 			return
 		}
-		item, err := s.store.CancelProjectTask(r.Context(), id)
-		if err != nil {
-			httpErr(w, http.StatusConflict, err)
-			return
-		}
-		jsonOut(w, http.StatusOK, item)
-		return
 	}
 	if len(parts) != 1 {
 		http.NotFound(w, r)
