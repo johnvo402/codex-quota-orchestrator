@@ -33,6 +33,7 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/quota", s.quota)
+	mux.HandleFunc("/v1/settings", s.settings)
 	mux.HandleFunc("/v1/tasks", s.tasks)
 	mux.HandleFunc("/v1/tasks/register", s.register)
 	mux.HandleFunc("/v1/tasks/checkpoint", s.checkpoint)
