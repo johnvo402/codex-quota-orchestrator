@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"codex-desktop-quota-guard/internal/codexquota"
@@ -55,8 +57,6 @@ func (s *Service) RunMonitor(ctx context.Context) {
 }
 
 func (s *Service) refreshAndReconcile(ctx context.Context) {
-	// Also reconcile abandoned companion deliveries while the daemon remains
-	// alive. A companion crash should not require restarting the daemon.
 	if _, err := s.store.RecoverStaleDeliveries(ctx, time.Now().UTC().Add(-60*time.Second)); err != nil {
 		s.log.Warn("stale Desktop delivery recovery failed", "error", err)
 	}
@@ -111,7 +111,69 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 			}
 			s.log.Info("Desktop resume queued", "thread", t.ThreadID, "actionId", action.ID, "fiveHourRemaining", snap.FiveHour.RemainingPercent, "weeklyRemaining", snap.Weekly.RemainingPercent)
 		}
+
+		s.ReconcileProjectQueues(ctx)
 	}
+}
+
+// ReconcileProjectQueues starts at most one queued work item per project. A
+// queue only advances after the latest managed task for that project completed
+// successfully, and only while quota is healthy enough to resume work.
+func (s *Service) ReconcileProjectQueues(ctx context.Context) {
+	q, _, err := s.CurrentDecision(ctx)
+	if err != nil || !s.policy.CanResume(q) || q.SoftPause {
+		return
+	}
+	projects, err := s.store.ListProjects(ctx, false)
+	if err != nil {
+		s.log.Warn("list projects for queue reconciliation failed", "error", err)
+		return
+	}
+	for _, p := range projects {
+		blocking, err := s.store.ProjectHasBlockingTask(ctx, p.ID)
+		if err != nil || blocking {
+			continue
+		}
+		active, err := s.store.ProjectHasActiveManagedTask(ctx, p.ID)
+		if err != nil || active {
+			continue
+		}
+		item, err := s.store.NextQueuedProjectTask(ctx, p.ID)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			s.log.Warn("read next queued project task failed", "project", p.ID, "error", err)
+			continue
+		}
+		threadID, err := s.store.ProjectDispatchThread(ctx, p.ID)
+		if err != nil {
+			// No completed Desktop thread yet, or the latest project task ended in
+			// a non-success terminal state. Keep the work item queued.
+			continue
+		}
+		action, err := s.store.QueueProjectTaskDispatch(ctx, item.ID, threadID, queuedTaskMessage(p, item))
+		if err != nil {
+			s.log.Warn("queue project task dispatch failed", "project", p.ID, "projectTask", item.ID, "error", err)
+			continue
+		}
+		s.log.Info("project task dispatch queued", "project", p.ID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
+	}
+}
+
+func queuedTaskMessage(p domain.Project, item domain.ProjectTask) string {
+	var b strings.Builder
+	b.WriteString("[Codex Task Queue] The previous project task completed. Start the next queued task now.\n\n")
+	b.WriteString("Project: ")
+	b.WriteString(p.Name)
+	b.WriteString("\nObjective: ")
+	b.WriteString(item.Objective)
+	if strings.TrimSpace(item.Details) != "" {
+		b.WriteString("\n\nDetails:\n")
+		b.WriteString(item.Details)
+	}
+	b.WriteString("\n\nTreat this as a new managed task in the same project. Call desktop_quota_guard.desktop_task_register with this objective and the current workspace, then execute the work normally. When finished, call desktop_quota_guard.task_complete so the next queued task can start.")
+	return b.String()
 }
 
 func (s *Service) readQuota(ctx context.Context) (quota.Snapshot, error) {
