@@ -55,8 +55,11 @@ func (s *Store) CreateProjectTask(ctx context.Context, projectID, objective, det
 	if _, err := s.GetProject(ctx, projectID); err != nil {
 		return domain.ProjectTask{}, err
 	}
+	if err := s.NormalizeProjectQueue(ctx, projectID); err != nil {
+		return domain.ProjectTask{}, err
+	}
 	var pos int64
-	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position),0)+1 FROM project_tasks WHERE project_id=? AND state IN ('QUEUED','DISPATCHING','DISPATCHED','RUNNING','NEEDS_REVIEW')`, projectID).Scan(&pos); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(position),0)+1 FROM project_tasks WHERE project_id=? AND state='QUEUED'`, projectID).Scan(&pos); err != nil {
 		return domain.ProjectTask{}, err
 	}
 	now := time.Now().UTC().UnixMilli()
@@ -73,6 +76,9 @@ func (s *Store) GetProjectTask(ctx context.Context, id string) (domain.ProjectTa
 }
 
 func (s *Store) ListProjectTasks(ctx context.Context, projectID string) ([]domain.ProjectTask, error) {
+	if err := s.NormalizeProjectQueue(ctx, projectID); err != nil {
+		return nil, err
+	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,project_id,objective,details,position,state,target_thread_id,action_id,created_at,updated_at,started_at,completed_at FROM project_tasks WHERE project_id=? ORDER BY CASE state WHEN 'RUNNING' THEN 0 WHEN 'DISPATCHING' THEN 1 WHEN 'DISPATCHED' THEN 2 WHEN 'NEEDS_REVIEW' THEN 3 WHEN 'QUEUED' THEN 4 ELSE 5 END, position, created_at`, projectID)
 	if err != nil {
 		return nil, err
@@ -101,12 +107,14 @@ func (s *Store) UpdateProjectTask(ctx context.Context, id, objective, details st
 		v.Objective = strings.TrimSpace(objective)
 	}
 	v.Details = strings.TrimSpace(details)
-	if position != nil && *position > 0 {
-		v.Position = *position
-	}
-	_, err = s.db.ExecContext(ctx, `UPDATE project_tasks SET objective=?,details=?,position=?,updated_at=? WHERE id=?`, v.Objective, v.Details, v.Position, time.Now().UTC().UnixMilli(), id)
+	_, err = s.db.ExecContext(ctx, `UPDATE project_tasks SET objective=?,details=?,updated_at=? WHERE id=?`, v.Objective, v.Details, time.Now().UTC().UnixMilli(), id)
 	if err != nil {
 		return domain.ProjectTask{}, err
+	}
+	if position != nil {
+		if err := s.MoveQueuedProjectTask(ctx, id, *position); err != nil {
+			return domain.ProjectTask{}, err
+		}
 	}
 	return s.GetProjectTask(ctx, id)
 }
@@ -119,8 +127,23 @@ func (s *Store) DeleteProjectTask(ctx context.Context, id string) error {
 	if v.State != domain.ProjectTaskQueued && v.State != domain.ProjectTaskCancelled && v.State != domain.ProjectTaskCompleted {
 		return fmt.Errorf("project task in state %s cannot be deleted", v.State)
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM project_tasks WHERE id=?`, id)
-	return err
+	if v.State != domain.ProjectTaskQueued {
+		_, err = s.db.ExecContext(ctx, `DELETE FROM project_tasks WHERE id=?`, id)
+		return err
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM project_tasks WHERE id=? AND state='QUEUED'`, id); err != nil {
+		return err
+	}
+	if err := normalizeQueuedProjectTasksTx(ctx, tx, v.ProjectID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CancelProjectTask(ctx context.Context, id string) (domain.ProjectTask, error) {
@@ -132,8 +155,26 @@ func (s *Store) CancelProjectTask(ctx context.Context, id string) (domain.Projec
 		return v, fmt.Errorf("project task in state %s cannot be cancelled", v.State)
 	}
 	now := time.Now().UTC().UnixMilli()
-	_, err = s.db.ExecContext(ctx, `UPDATE project_tasks SET state='CANCELLED',updated_at=?,completed_at=? WHERE id=?`, now, now, id)
+	if v.State == domain.ProjectTaskNeedsReview {
+		_, err = s.db.ExecContext(ctx, `UPDATE project_tasks SET state='CANCELLED',updated_at=?,completed_at=? WHERE id=?`, now, now, id)
+		if err != nil {
+			return domain.ProjectTask{}, err
+		}
+		return s.GetProjectTask(ctx, id)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return domain.ProjectTask{}, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE project_tasks SET state='CANCELLED',updated_at=?,completed_at=? WHERE id=? AND state='QUEUED'`, now, now, id); err != nil {
+		return domain.ProjectTask{}, err
+	}
+	if err := normalizeQueuedProjectTasksTx(ctx, tx, v.ProjectID); err != nil {
+		return domain.ProjectTask{}, err
+	}
+	if err := tx.Commit(); err != nil {
 		return domain.ProjectTask{}, err
 	}
 	return s.GetProjectTask(ctx, id)
@@ -185,8 +226,8 @@ func (s *Store) QueueProjectTaskDispatch(ctx context.Context, itemID, threadID, 
 		return Action{}, err
 	}
 	defer tx.Rollback()
-	var stateRaw string
-	if err := tx.QueryRowContext(ctx, `SELECT state FROM project_tasks WHERE id=?`, itemID).Scan(&stateRaw); err != nil {
+	var stateRaw, projectID string
+	if err := tx.QueryRowContext(ctx, `SELECT state,project_id FROM project_tasks WHERE id=?`, itemID).Scan(&stateRaw, &projectID); err != nil {
 		return Action{}, err
 	}
 	if domain.ProjectTaskState(stateRaw) != domain.ProjectTaskQueued {
@@ -202,6 +243,9 @@ func (s *Store) QueueProjectTaskDispatch(ctx context.Context, itemID, threadID, 
 		return Action{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE project_tasks SET state='DISPATCHING',target_thread_id=?,action_id=?,updated_at=? WHERE id=?`, threadID, actionID, now, itemID); err != nil {
+		return Action{}, err
+	}
+	if err := normalizeQueuedProjectTasksTx(ctx, tx, projectID); err != nil {
 		return Action{}, err
 	}
 	if err := tx.Commit(); err != nil {
