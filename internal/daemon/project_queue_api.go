@@ -5,8 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-
-	"codex-desktop-quota-guard/internal/store"
 )
 
 type projectTaskReq struct {
@@ -112,5 +110,3 @@ func queueStatus(err error) int {
 	}
 	return http.StatusConflict
 }
-
-var _ = store.Action{}
