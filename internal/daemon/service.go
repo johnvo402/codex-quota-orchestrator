@@ -29,6 +29,17 @@ func NewService(cfg config.Config, st *store.Store, log *slog.Logger) *Service {
 	return &Service{cfg: cfg, store: st, log: log, policy: quota.Policy{SoftThreshold: cfg.SoftThresholdPercent, HardThreshold: cfg.HardThresholdPercent, ResumeThreshold: cfg.ResumeThresholdPercent}}
 }
 
+func (s *Service) Recover(ctx context.Context) error {
+	recovered, err := s.store.RecoverStaleDeliveries(ctx, time.Now().UTC().Add(-60*time.Second))
+	if err != nil {
+		return fmt.Errorf("recover stale Desktop deliveries: %w", err)
+	}
+	if recovered > 0 {
+		s.log.Warn("uncertain Desktop deliveries recovered", "count", recovered)
+	}
+	return nil
+}
+
 func (s *Service) RunMonitor(ctx context.Context) {
 	s.refreshAndReconcile(ctx)
 	ticker := time.NewTicker(s.cfg.PollInterval())
@@ -44,6 +55,12 @@ func (s *Service) RunMonitor(ctx context.Context) {
 }
 
 func (s *Service) refreshAndReconcile(ctx context.Context) {
+	// Also reconcile abandoned companion deliveries while the daemon remains
+	// alive. A companion crash should not require restarting the daemon.
+	if _, err := s.store.RecoverStaleDeliveries(ctx, time.Now().UTC().Add(-60*time.Second)); err != nil {
+		s.log.Warn("stale Desktop delivery recovery failed", "error", err)
+	}
+
 	snap, err := s.readQuota(ctx)
 	if err != nil {
 		s.log.Warn("quota refresh failed", "error", err)
@@ -62,95 +79,37 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 	}
 
 	if snap.SoftPause {
-		running, _ := s.store.ListStates(
-			ctx,
-			domain.StateRunning,
-		)
-
+		running, _ := s.store.ListStates(ctx, domain.StateRunning)
 		reason := snap.PauseReason
-
 		if reason == "" {
 			reason = "quota threshold"
 		}
-
 		for _, t := range running {
-			if _, err := s.store.Transition(
-				ctx,
-				t.ThreadID,
-				domain.StatePauseRequested,
-				reason,
-			); err != nil {
+			if _, err := s.store.Transition(ctx, t.ThreadID, domain.StatePauseRequested, reason); err != nil {
 				continue
 			}
-
-			msg := pauseMessage(snap)
-
-			_, _ = s.store.EnqueueAction(
-				ctx,
-				"pause_notice",
-				t.ThreadID,
-				msg,
-			)
+			_, _ = s.store.EnqueueAction(ctx, "pause_notice", t.ThreadID, pauseMessage(snap))
 		}
-
 		return
 	}
+
 	if s.policy.CanResume(snap) {
-		// Nếu quota hồi phục trước khi task thực sự pause,
-		// trả PAUSE_REQUESTED về RUNNING.
-		pending, _ := s.store.ListStates(
-			ctx,
-			domain.StatePauseRequested,
-		)
-
+		pending, _ := s.store.ListStates(ctx, domain.StatePauseRequested)
 		for _, t := range pending {
-			_, err := s.store.Transition(
-				ctx,
-				t.ThreadID,
-				domain.StateRunning,
-				"quota recovered before cooperative pause completed",
-			)
-
+			_, err := s.store.Transition(ctx, t.ThreadID, domain.StateRunning, "quota recovered before cooperative pause completed")
 			if err != nil {
-				s.log.Warn(
-					"restore pause-requested task",
-					"thread", t.ThreadID,
-					"error", err,
-				)
+				s.log.Warn("restore pause-requested task", "thread", t.ThreadID, "error", err)
 			}
 		}
 
-		paused, _ := s.store.ListStates(
-			ctx,
-			domain.StatePausedQuota,
-		)
-
+		paused, _ := s.store.ListStates(ctx, domain.StatePausedQuota)
 		for _, t := range paused {
-			action, err := s.store.QueueResume(
-				ctx,
-				t.ThreadID,
-				resumeMessage(t, snap),
-			)
-
+			action, err := s.store.QueueResumeSafe(ctx, t.ThreadID, resumeMessage(t, snap))
 			if err != nil {
-				s.log.Error(
-					"queue Desktop resume",
-					"thread", t.ThreadID,
-					"error", err,
-				)
-
+				s.log.Error("queue Desktop resume", "thread", t.ThreadID, "error", err)
 				continue
 			}
-
-			s.log.Info(
-				"Desktop resume queued",
-				"thread", t.ThreadID,
-				"actionId", action.ID,
-				"fiveHourRemaining",
-				snap.FiveHour.RemainingPercent,
-				"weeklyRemaining",
-				snap.Weekly.RemainingPercent,
-			)
+			s.log.Info("Desktop resume queued", "thread", t.ThreadID, "actionId", action.ID, "fiveHourRemaining", snap.FiveHour.RemainingPercent, "weeklyRemaining", snap.Weekly.RemainingPercent)
 		}
 	}
 }
@@ -190,22 +149,16 @@ func pauseMessage(q quota.Snapshot) string {
 	)
 }
 
-func resumeMessage(
-	t domain.Task,
-	q quota.Snapshot,
-) string {
+func resumeMessage(t domain.Task, q quota.Snapshot) string {
 	extra := ""
-
 	if t.Checkpoint != "" {
 		extra = " Saved checkpoint: " + t.Checkpoint
 	}
-
 	return fmt.Sprintf(
 		"[Desktop Quota Guard] Quota is available again "+
 			"(5h=%s, weekly=%s). "+
 			"Continue the previously paused task from the saved state.%s "+
-			"Before another long phase, "+
-			"call desktop_quota_guard.quota_check.",
+			"Before another long phase, call desktop_quota_guard.quota_check.",
 		windowRemaining(q.FiveHour),
 		windowRemaining(q.Weekly),
 		extra,
@@ -216,12 +169,9 @@ func windowRemaining(w quota.Window) string {
 	if !w.Available {
 		return "unavailable"
 	}
-
-	return fmt.Sprintf(
-		"%.0f%%",
-		w.RemainingPercent,
-	)
+	return fmt.Sprintf("%.0f%%", w.RemainingPercent)
 }
+
 func (s *Service) CurrentDecision(ctx context.Context) (quota.Snapshot, quota.Decision, error) {
 	q, err := s.store.LatestQuota(ctx)
 	if err != nil {

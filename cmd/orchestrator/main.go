@@ -28,6 +28,7 @@ func main() {
 		os.Exit(1)
 	}
 }
+
 func run() error {
 	if len(os.Args) < 2 {
 		usage()
@@ -76,16 +77,8 @@ func doctor(cfg config.Config, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
-	policy := quota.Policy{
-		SoftThreshold:   cfg.SoftThresholdPercent,
-		HardThreshold:   cfg.HardThresholdPercent,
-		ResumeThreshold: cfg.ResumeThresholdPercent,
-	}
-
-	snap := quota.FromRateLimits(
-		rates,
-		policy,
-	)
+	policy := quota.Policy{SoftThreshold: cfg.SoftThresholdPercent, HardThreshold: cfg.HardThresholdPercent, ResumeThreshold: cfg.ResumeThresholdPercent}
+	snap := quota.FromRateLimits(rates, policy)
 	relay, relayErr := desktop.LoadRelay(cfg.RelayPath())
 	out := map[string]any{
 		"account":         acct.Account,
@@ -93,7 +86,6 @@ func doctor(cfg config.Config, jsonOut bool) error {
 		"rawRateLimits":   rates,
 		"relay":           relay,
 		"relayConfigured": relayErr == nil,
-
 		"desktopNativeCheck": map[string]any{
 			"status": "not_checked",
 			"reason": "doctor runs outside Codex Desktop; use desktop_guard_status from a Desktop task",
@@ -107,39 +99,19 @@ func doctor(cfg config.Config, jsonOut bool) error {
 	} else {
 		fmt.Printf("Account: %s (%s)\n", acct.Account.Email, acct.Account.PlanType)
 	}
-	printQuotaWindow(
-		"5h",
-		snap.FiveHour,
-	)
-
-	printQuotaWindow(
-		"Weekly",
-		snap.Weekly,
-	)
-
-	fmt.Printf(
-		"Effective: %.0f%% remaining\n",
-		snap.RemainingPercent,
-	)
-
+	printQuotaWindow("5h", snap.FiveHour)
+	printQuotaWindow("Weekly", snap.Weekly)
+	fmt.Printf("Effective: %.0f%% remaining\n", snap.RemainingPercent)
 	if snap.PauseReason != "" {
-		fmt.Println(
-			"Pause reason:",
-			snap.PauseReason,
-		)
+		fmt.Println("Pause reason:", snap.PauseReason)
 	}
 	if relayErr != nil {
 		fmt.Println("Relay: not initialized (run: orchestrator relay-init)")
 	} else {
 		fmt.Println("Relay thread:", relay.ExecutorThreadID)
 	}
-	fmt.Println(
-		"Desktop native delivery: not tested here",
-	)
-
-	fmt.Println(
-		"Use desktop_guard_status inside Codex Desktop.",
-	)
+	fmt.Println("Desktop native delivery: not tested here")
+	fmt.Println("Use desktop_guard_status inside Codex Desktop.")
 	return nil
 }
 
@@ -183,10 +155,15 @@ func runDaemon(cfg config.Config) error {
 		return err
 	}
 	defer st.Close()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	svc := daemon.NewService(cfg, st, log)
+	if err := svc.Recover(ctx); err != nil {
+		return fmt.Errorf("startup recovery: %w", err)
+	}
 	go svc.RunMonitor(ctx)
+
 	srv := daemon.NewServer(cfg.ListenAddr, svc, st, log)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.ListenAndServe() }()
@@ -234,43 +211,25 @@ func printJSON(v any) error {
 	}
 	return err
 }
+
 func trim(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
 	return s[:n-3] + "..."
 }
+
 func usage() { fmt.Println("orchestrator <doctor|relay-init|daemon|list> [--config path] [--json]") }
 
 var _ = filepath.Separator
 
-func printQuotaWindow(
-	name string,
-	w quota.Window,
-) {
+func printQuotaWindow(name string, w quota.Window) {
 	if !w.Available {
-		fmt.Printf(
-			"%-10s unavailable\n",
-			name+":",
-		)
-
+		fmt.Printf("%-10s unavailable\n", name+":")
 		return
 	}
-
-	fmt.Printf(
-		"%-10s %.0f%% remaining (%.0f%% used)\n",
-		name+":",
-		w.RemainingPercent,
-		w.UsedPercent,
-	)
-
+	fmt.Printf("%-10s %.0f%% remaining (%.0f%% used)\n", name+":", w.RemainingPercent, w.UsedPercent)
 	if w.ResetAt != nil {
-		fmt.Printf(
-			"%-10s %s\n",
-			name+" reset:",
-			w.ResetAt.Local().Format(
-				time.RFC3339,
-			),
-		)
+		fmt.Printf("%-10s %s\n", name+" reset:", w.ResetAt.Local().Format(time.RFC3339))
 	}
 }
