@@ -7,5 +7,6 @@
   "softThresholdPercent": 10,
   "hardThresholdPercent": 5,
   "resumeThresholdPercent": 20,
-  "requestTimeoutSeconds": 20
+  "requestTimeoutSeconds": 20,
+  "autoDispatch": true
 }
