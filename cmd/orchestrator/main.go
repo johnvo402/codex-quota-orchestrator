@@ -11,7 +11,9 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strings"
 	"syscall"
@@ -74,6 +76,8 @@ func run() error {
 		return status(cfg, *jsonOut)
 	case "recover":
 		return recoverTask(cfg, strings.TrimSpace(*threadID), strings.TrimSpace(*resolution), *jsonOut)
+	case "ui":
+		return openDashboard(cfg)
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -185,6 +189,9 @@ func runDaemon(cfg config.Config) error {
 		return err
 	}
 	defer st.Close()
+	if err := st.BackfillProjects(context.Background()); err != nil {
+		log.Warn("workspace project backfill failed", "error", err)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -197,7 +204,7 @@ func runDaemon(cfg config.Config) error {
 	srv := daemon.NewServer(cfg.ListenAddr, svc, st, log)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(listener) }()
-	log.Info("Desktop quota daemon started", "listen", cfg.ListenAddr, "db", cfg.DBPath())
+	log.Info("Desktop quota daemon started", "listen", cfg.ListenAddr, "db", cfg.DBPath(), "dashboard", cfg.BaseURL())
 	select {
 	case <-ctx.Done():
 		sd, c := context.WithTimeout(context.Background(), 5*time.Second)
@@ -224,6 +231,27 @@ func daemonHealthy(cfg config.Config) bool {
 	}
 	defer resp.Body.Close()
 	return resp.StatusCode/100 == 2
+}
+
+func openDashboard(cfg config.Config) error {
+	if !daemonHealthy(cfg) {
+		return fmt.Errorf("daemon is not running at %s; start it first with `orchestrator daemon`", cfg.BaseURL())
+	}
+	url := cfg.BaseURL() + "/"
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	default:
+		cmd = exec.Command("xdg-open", url)
+	}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("open dashboard: %w", err)
+	}
+	fmt.Println("Dashboard:", url)
+	return nil
 }
 
 func listTasks(cfg config.Config, jsonOut bool) error {
@@ -276,6 +304,7 @@ func status(cfg config.Config, jsonOut bool) error {
 		"version":         version,
 		"daemonRunning":   daemonHealthy(cfg),
 		"listenAddr":      cfg.ListenAddr,
+		"dashboardURL":    cfg.BaseURL() + "/",
 		"dataDir":         cfg.DataDir,
 		"dbPath":          cfg.DBPath(),
 		"managedTasks":    len(items),
@@ -294,6 +323,7 @@ func status(cfg config.Config, jsonOut bool) error {
 
 	fmt.Printf("Version:       %s\n", version)
 	fmt.Printf("Daemon:        %s (%s)\n", yesNo(daemonHealthy(cfg), "running", "stopped"), cfg.ListenAddr)
+	fmt.Printf("Dashboard:     %s/\n", cfg.BaseURL())
 	fmt.Printf("Data:          %s\n", cfg.DataDir)
 	if qErr == nil {
 		fmt.Printf("Quota 5h:      %s\n", windowRemaining(q.FiveHour))
@@ -314,7 +344,7 @@ func status(cfg config.Config, jsonOut bool) error {
 		fmt.Printf("  %-16s %d\n", k, counts[k])
 	}
 	if counts[string(domain.StateNeedsReview)] > 0 {
-		fmt.Println("Needs review: run `orchestrator list`, then `orchestrator recover --thread <id> --resolution <retry|running|cancel>`.")
+		fmt.Println("Needs review: use the dashboard or run `orchestrator recover --thread <id> --resolution <retry|running|cancel>`.")
 	}
 	return nil
 }
@@ -385,7 +415,8 @@ func trim(s string, n int) string {
 }
 
 func usage() {
-	fmt.Println("orchestrator <doctor|relay-init|daemon|list|status|recover|version> [options]")
+	fmt.Println("orchestrator <doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("  ui                                      Open local dashboard")
 	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
 }
 
