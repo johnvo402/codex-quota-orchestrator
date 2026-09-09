@@ -103,3 +103,21 @@ func TestExplicitMissingConfigFails(t *testing.T) {
 		t.Fatal("expected explicit missing config to fail")
 	}
 }
+
+func TestValidateRejectsNonLoopbackListenAddr(t *testing.T) {
+	cfg := Default()
+	cfg.ListenAddr = "0.0.0.0:47631"
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected non-loopback listen address to be rejected")
+	}
+}
+
+func TestValidateAcceptsLoopbackHosts(t *testing.T) {
+	for _, addr := range []string{"127.0.0.1:47631", "localhost:47631", "[::1]:47631"} {
+		cfg := Default()
+		cfg.ListenAddr = addr
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("expected %s to be valid: %v", addr, err)
+		}
+	}
+}
