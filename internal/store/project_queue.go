@@ -35,6 +35,13 @@ CREATE INDEX IF NOT EXISTS idx_project_tasks_queue
 ON project_tasks(project_id,state,position,id);
 CREATE INDEX IF NOT EXISTS idx_project_tasks_thread
 ON project_tasks(target_thread_id,state);
+
+CREATE TABLE IF NOT EXISTS project_queue_settings(
+ project_id TEXT PRIMARY KEY,
+ mode TEXT NOT NULL DEFAULT 'AUTO' CHECK(mode IN ('AUTO','MANUAL','PAUSED')),
+ updated_at INTEGER NOT NULL,
+ FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+);
 `)
 	return err
 }
