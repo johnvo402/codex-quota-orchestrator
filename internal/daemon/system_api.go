@@ -9,6 +9,8 @@ import (
 
 const restartControlHeader = "X-CDQG-Control"
 
+var launchRestartChildFn = launchRestartChild
+
 func (s *Server) systemRestart(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -19,7 +21,7 @@ func (s *Server) systemRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := launchRestartChild(s.service.cfg.ConfigPath(), s.service.cfg.BaseURL()+"/healthz"); err != nil {
+	if err := launchRestartChildFn(s.service.cfg.ConfigPath(), s.service.cfg.BaseURL()+"/healthz"); err != nil {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
