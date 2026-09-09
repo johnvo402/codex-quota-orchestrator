@@ -9,13 +9,13 @@ import (
 )
 
 type installBackup struct {
-	existed        bool
-	version        string
-	backupDir      string
-	agentsPath     string
-	agentsExisted  bool
-	agentsBackup   string
-	files          map[string]string
+	existed       bool
+	version       string
+	backupDir     string
+	agentsPath    string
+	agentsExisted bool
+	agentsBackup  string
+	files         map[string]string
 }
 
 func createInstallBackup(p installPaths) (installBackup, error) {
