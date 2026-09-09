@@ -14,6 +14,7 @@ import (
 
 	"codex-desktop-quota-guard/internal/config"
 	"codex-desktop-quota-guard/internal/mcpserver"
+	"codex-desktop-quota-guard/internal/observability"
 )
 
 func main() {
@@ -22,14 +23,25 @@ func main() {
 		fmt.Fprintln(os.Stderr, "config:", err)
 		os.Exit(1)
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	log, logCloser, logErr := observability.NewLogger(cfg.DataDir, "companion", os.Stderr)
+	if logErr != nil {
+		fmt.Fprintln(os.Stderr, "companion logging:", logErr)
+		log = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	} else {
+		defer logCloser.Close()
+	}
+
+	log.Info("Desktop companion started")
 	ensureDaemon(cfg, log)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if err := mcpserver.New(cfg, log).Run(ctx, os.Stdin, os.Stdout); err != nil {
+		log.Error("Desktop companion failed", "error", err)
 		fmt.Fprintln(os.Stderr, "desktop companion:", err)
 		os.Exit(1)
 	}
+	log.Info("Desktop companion stopped")
 }
 
 func ensureDaemon(cfg config.Config, log *slog.Logger) {

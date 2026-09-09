@@ -70,39 +70,73 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 		s.log.Warn("save quota failed", "error", err)
 		return
 	}
+	s.log.Info(
+		"quota sampled",
+		"fiveHourAvailable", snap.FiveHour.Available,
+		"fiveHourRemaining", snap.FiveHour.RemainingPercent,
+		"weeklyAvailable", snap.Weekly.Available,
+		"weeklyRemaining", snap.Weekly.RemainingPercent,
+		"effectiveRemaining", snap.RemainingPercent,
+		"softPause", snap.SoftPause,
+		"pauseReason", snap.PauseReason,
+	)
+
 	tasks, err := s.store.ListTasks(ctx)
 	if err != nil {
+		s.log.Warn("list managed tasks after quota sample failed", "error", err)
 		return
 	}
 	for _, t := range tasks {
-		_ = s.store.UpdateTaskQuota(ctx, t.ThreadID, snap)
+		if err := s.store.UpdateTaskQuota(ctx, t.ThreadID, snap); err != nil {
+			s.log.Warn("update task quota failed", "thread", t.ThreadID, "error", err)
+		}
 	}
 
 	if snap.SoftPause {
-		running, _ := s.store.ListStates(ctx, domain.StateRunning)
+		running, err := s.store.ListStates(ctx, domain.StateRunning)
+		if err != nil {
+			s.log.Warn("list running tasks for quota pause failed", "error", err)
+			return
+		}
 		reason := snap.PauseReason
 		if reason == "" {
 			reason = "quota threshold"
 		}
 		for _, t := range running {
 			if _, err := s.store.Transition(ctx, t.ThreadID, domain.StatePauseRequested, reason); err != nil {
+				s.log.Warn("request cooperative quota pause failed", "thread", t.ThreadID, "error", err)
 				continue
 			}
-			_, _ = s.store.EnqueueAction(ctx, "pause_notice", t.ThreadID, pauseMessage(snap))
+			action, err := s.store.EnqueueAction(ctx, "pause_notice", t.ThreadID, pauseMessage(snap))
+			if err != nil {
+				s.log.Error("queue Desktop pause notice", "thread", t.ThreadID, "error", err)
+				continue
+			}
+			s.log.Warn("cooperative quota pause requested", "thread", t.ThreadID, "actionId", action.ID, "reason", reason)
 		}
 		return
 	}
 
 	if s.policy.CanResume(snap) {
-		pending, _ := s.store.ListStates(ctx, domain.StatePauseRequested)
+		pending, err := s.store.ListStates(ctx, domain.StatePauseRequested)
+		if err != nil {
+			s.log.Warn("list pause-requested tasks failed", "error", err)
+			return
+		}
 		for _, t := range pending {
 			_, err := s.store.Transition(ctx, t.ThreadID, domain.StateRunning, "quota recovered before cooperative pause completed")
 			if err != nil {
 				s.log.Warn("restore pause-requested task", "thread", t.ThreadID, "error", err)
+				continue
 			}
+			s.log.Info("pause-requested task restored", "thread", t.ThreadID)
 		}
 
-		paused, _ := s.store.ListStates(ctx, domain.StatePausedQuota)
+		paused, err := s.store.ListStates(ctx, domain.StatePausedQuota)
+		if err != nil {
+			s.log.Warn("list quota-paused tasks failed", "error", err)
+			return
+		}
 		for _, t := range paused {
 			action, err := s.store.QueueResumeSafe(ctx, t.ThreadID, resumeMessage(t, snap))
 			if err != nil {
