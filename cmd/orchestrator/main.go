@@ -70,6 +70,8 @@ func run() error {
 		return teardownCodexIntegration()
 	case "config":
 		return configCommand(cfg, fs.Args(), *jsonOut)
+	case "restart":
+		return restartDaemon(cfg)
 	case "doctor":
 		return doctor(cfg, *jsonOut)
 	case "relay-init":
@@ -423,10 +425,11 @@ func trim(s string, n int) string {
 }
 
 func usage() {
-	fmt.Println("orchestrator <setup|teardown|config|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("orchestrator <setup|teardown|config|restart|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
 	fmt.Println("  setup                                   Configure Codex MCP, AGENTS.md, and relay")
 	fmt.Println("  teardown                                Remove Codex MCP and managed AGENTS.md block")
 	fmt.Println("  config [show|path|validate]              Inspect shared configuration")
+	fmt.Println("  restart                                 Gracefully restart the quota daemon")
 	fmt.Println("  ui                                      Open local dashboard")
 	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
 }
