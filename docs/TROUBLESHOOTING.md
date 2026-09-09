@@ -47,6 +47,42 @@ For raw Codex account/rate-limit diagnostics:
 
 Native Desktop delivery can only be proven from inside a Codex Desktop task with `desktop_guard_status` because the native pipe belongs to the Desktop process tree.
 
+## Runtime logs
+
+The daemon and Desktop companion persist structured JSON Lines logs under:
+
+```text
+~\.codex-desktop-quota-guard\logs\
+```
+
+Start with:
+
+```powershell
+orch logs
+```
+
+Show only recent warnings/errors or errors:
+
+```powershell
+orch logs --tail 100 --level warn
+orch logs --level error
+```
+
+Follow new records while reproducing a problem:
+
+```powershell
+orch logs --follow
+```
+
+Filter one background component:
+
+```powershell
+orch logs --component daemon
+orch logs --component companion
+```
+
+Use `orch logs --json` when the original structured records are needed. See `docs/LOGGING.md` for rotation, filtering, and privacy details.
+
 ## Native delivery unavailable
 
 Inside Codex Desktop, call `desktop_guard_status`.
