@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -21,7 +22,11 @@ func (s *Server) systemRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := launchRestartChildFn(s.service.cfg.ConfigPath(), s.service.cfg.BaseURL()+"/healthz"); err != nil {
+	configPath := s.service.cfg.ConfigPath()
+	if _, err := os.Stat(configPath); err != nil {
+		configPath = ""
+	}
+	if err := launchRestartChildFn(configPath, s.service.cfg.BaseURL()+"/healthz"); err != nil {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
