@@ -120,6 +120,9 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 // queue only advances after the latest managed task for that project completed
 // successfully, and only while quota is healthy enough to resume work.
 func (s *Service) ReconcileProjectQueues(ctx context.Context) {
+	if !s.cfg.AutoDispatch {
+		return
+	}
 	q, _, err := s.CurrentDecision(ctx)
 	if err != nil || !s.policy.CanResume(q) || q.SoftPause {
 		return
