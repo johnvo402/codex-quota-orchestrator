@@ -213,6 +213,27 @@ func normalizeQueuedProjectTasksTx(ctx context.Context, tx *sql.Tx, projectID st
 }
 
 func writeQueuedOrderTx(ctx context.Context, tx *sql.Tx, projectID string, orderedIDs []string) error {
+	// Move every queued row into a unique negative slot first. This keeps the
+	// transaction compatible with the partial UNIQUE(project_id,position)
+	// invariant while swapping arbitrary rows.
+	for i, id := range orderedIDs {
+		res, err := tx.ExecContext(ctx, `
+UPDATE project_tasks
+SET position=?
+WHERE id=? AND project_id=? AND state='QUEUED'
+`, -(i + 1), id, projectID)
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("queue changed while reordering project task %s", id)
+		}
+	}
+
 	now := time.Now().UTC().UnixMilli()
 	for i, id := range orderedIDs {
 		res, err := tx.ExecContext(ctx, `
