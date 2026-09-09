@@ -2,6 +2,7 @@ param(
     [switch]$SkipRelayInit,
     [switch]$SkipAgentInstructions,
     [switch]$SkipAutoStart,
+    [switch]$SkipPath,
     [switch]$ForceBuild
 )
 
@@ -15,6 +16,29 @@ $taskName = 'Codex Desktop Quota Guard'
 function Assert-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
         throw "Required command '$Name' was not found in PATH."
+    }
+}
+
+function Add-UserPath([string]$PathToAdd) {
+    $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $parts = @()
+    if ($current) {
+        $parts = @($current -split ';' | Where-Object { $_ -and $_.Trim() })
+    }
+    $normalized = $PathToAdd.TrimEnd('\')
+    $exists = $false
+    foreach ($part in $parts) {
+        if ($part.Trim().TrimEnd('\') -ieq $normalized) {
+            $exists = $true
+            break
+        }
+    }
+    if (-not $exists) {
+        $newPath = if ($current) { "$current;$PathToAdd" } else { $PathToAdd }
+        [Environment]::SetEnvironmentVariable('Path', $newPath, 'User')
+    }
+    if (-not (($env:Path -split ';') | Where-Object { $_.Trim().TrimEnd('\') -ieq $normalized })) {
+        $env:Path = "$PathToAdd;$env:Path"
     }
 }
 
@@ -48,10 +72,16 @@ if ($needBuild) {
 Write-Host "==> Installing binaries to $installBin"
 New-Item -ItemType Directory -Force $installBin | Out-Null
 Copy-Item $orchestratorSource (Join-Path $installBin 'orchestrator.exe') -Force
+Copy-Item $orchestratorSource (Join-Path $installBin 'orch.exe') -Force
 Copy-Item $companionSource (Join-Path $installBin 'desktop-companion.exe') -Force
 
 $orchestrator = (Resolve-Path (Join-Path $installBin 'orchestrator.exe')).Path
 $companion = (Resolve-Path (Join-Path $installBin 'desktop-companion.exe')).Path
+
+if (-not $SkipPath) {
+    Write-Host '==> Adding CodexQuotaGuard bin directory to user PATH'
+    Add-UserPath $installBin
+}
 
 Write-Host '==> Registering MCP companion globally in Codex'
 try { & codex mcp remove desktop-quota-guard 2>$null | Out-Null } catch {}
@@ -116,11 +146,15 @@ Write-Host "Installed binaries: $installBin"
 Write-Host "Autostart task:      $taskName"
 Write-Host "Dashboard:           http://127.0.0.1:47631/"
 Write-Host ''
+if (-not $SkipPath) {
+    Write-Host "CLI alias installed: orch"
+    Write-Host 'Open a new terminal if the orch command is not visible in an already-open shell.'
+}
 Write-Host 'Fully quit and reopen Codex Desktop so it reloads the MCP server.'
 Write-Host ''
 Write-Host 'Useful commands:'
-Write-Host "  & '$orchestrator' ui"
-Write-Host "  & '$orchestrator' status"
-Write-Host "  & '$orchestrator' doctor"
-Write-Host "  & '$orchestrator' list"
-Write-Host "  & '$orchestrator' version"
+Write-Host '  orch ui'
+Write-Host '  orch status'
+Write-Host '  orch doctor'
+Write-Host '  orch list'
+Write-Host '  orch version'
