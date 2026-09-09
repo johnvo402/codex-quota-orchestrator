@@ -1,36 +1,13 @@
 package main
 
 import (
-	"flag"
-	"fmt"
 	"os"
 	"strings"
 	"time"
-
-	"codex-desktop-quota-guard/internal/config"
 )
 
 func init() {
 	waitForRestartPredecessor()
-	if len(os.Args) < 2 || os.Args[1] != "restart" {
-		return
-	}
-
-	fs := flag.NewFlagSet("restart", flag.ContinueOnError)
-	cfgPath := fs.String("config", "", "config JSON")
-	if err := fs.Parse(os.Args[2:]); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(2)
-	}
-	cfg, err := config.Load(*cfgPath)
-	if err == nil {
-		err = restartDaemon(cfg)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
-	os.Exit(0)
 }
 
 func waitForRestartPredecessor() {
