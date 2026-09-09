@@ -2,75 +2,138 @@
 
 Desktop-first quota-aware orchestration and local task management for Codex.
 
-Codex Desktop stays the owner and UI for real work. The guard monitors ChatGPT/Codex quota, persists checkpoints and task state, cooperatively pauses work at safe boundaries, sends a continuation back into the same Desktop thread when quota is available again, and includes a local dashboard for project/task management.
+Codex Desktop remains the owner and UI for real work. The guard monitors Codex quota, persists task/checkpoint state, cooperatively pauses work at safe boundaries, resumes through the native Desktop pipe, and provides a local dashboard with project queues.
 
 ## Current capabilities
 
-- Separates the 5-hour and weekly Codex quota windows.
+- Separate 5-hour and weekly Codex quota windows.
 - Local Go daemon with SQLite persistence.
-- Codex Desktop MCP companion receives the current Desktop `threadId`.
-- Cooperative pause/checkpoint flow at safe model/tool boundaries.
-- Native Windows Desktop pipe discovery and `send_message_to_thread` resume delivery.
-- Crash-safe action claim semantics that avoid duplicate resume sends.
-- `NEEDS_REVIEW` state when native delivery outcome is uncertain.
-- Manual recovery from CLI or dashboard.
-- Local web dashboard embedded directly in `orchestrator.exe`.
-- Project/workspace grouping with automatic project creation from task workspace paths.
-- Project CRUD and safe task management (edit metadata, pause, cancel, recover, archive/delete terminal tasks).
-- Sequential task queues per project: add work while another task is running and automatically dispatch the next item after successful completion.
-- Task event timeline and quota/task overview.
-- Single-instance daemon behavior.
-- Windows installer with stable `%LOCALAPPDATA%` binary paths and per-user autostart.
-- Tagged GitHub releases package Windows x64 binaries, scripts and docs.
+- Codex Desktop MCP companion captures the current Desktop `threadId`.
+- Cooperative pause/checkpoint/resume flow.
+- Native Windows Desktop `send_message_to_thread` delivery.
+- Crash-safe action claiming and `NEEDS_REVIEW` recovery.
+- Project/workspace grouping and sequential project task queues.
+- Embedded local dashboard with task/project management.
+- `orch` CLI installed on the current user's PATH.
+- Native Windows EXE installer/uninstaller.
+- Hidden Windows background daemon with per-user autostart.
 
-## Local dashboard
+## Install on Windows
 
-The daemon serves the dashboard on the same localhost endpoint as its API:
+Prerequisites:
+
+- Windows 10/11 x64
+- Codex Desktop
+- Codex CLI installed and logged in
+
+Download the latest Windows x64 ZIP from GitHub Releases, extract it, then double-click:
+
+```text
+CodexQuotaGuardSetup.exe
+```
+
+No PowerShell execution-policy change and no `.ps1` installer are required.
+
+Setup installs stable files under:
+
+```text
+%LOCALAPPDATA%\CodexQuotaGuard\
+├─ Uninstall.exe
+└─ bin\
+   ├─ orchestrator.exe
+   ├─ orchestrator-daemon.exe
+   ├─ orch.exe
+   └─ desktop-companion.exe
+```
+
+It also:
+
+- adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current User PATH;
+- registers `desktop-quota-guard` through Codex CLI;
+- installs the managed Quota Guard block in `~/.codex/AGENTS.md`;
+- initializes the relay if needed;
+- registers per-user Windows autostart;
+- registers **Codex Desktop Quota Guard** in Windows Installed Apps;
+- starts the daemon in the background with no console window.
+
+After installation, fully quit and reopen Codex Desktop once, then open a new terminal and run:
+
+```powershell
+orch status
+orch ui
+```
+
+## Upgrade / repair
+
+Download and extract the newer release, then run its `CodexQuotaGuardSetup.exe` again.
+
+The native setup behaves as install-or-upgrade and preserves:
+
+```text
+~\.codex-desktop-quota-guard\
+```
+
+including SQLite task history and relay state.
+
+Before modifying an existing install, setup checks whether Codex Desktop is still using `desktop-companion.exe`. If it is, setup asks you to fully quit Codex Desktop and retry instead of leaving the installation half-upgraded.
+
+## Uninstall
+
+Use either:
+
+```text
+Settings
+→ Apps
+→ Installed apps
+→ Codex Desktop Quota Guard
+→ Uninstall
+```
+
+or double-click:
+
+```text
+%LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
+```
+
+Interactive uninstall asks whether to also delete runtime state.
+
+Command-line uninstall:
+
+```powershell
+& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent
+```
+
+Remove local state too:
+
+```powershell
+& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent --purge-data
+```
+
+## Everyday commands
+
+```powershell
+orch status
+orch ui
+orch list
+orch doctor
+orch version
+```
+
+Dashboard:
 
 ```text
 http://127.0.0.1:47631/
 ```
 
-Open it with:
-
-```powershell
-orchestrator ui
-```
-
-or after installation:
-
-```powershell
-$oq = "$env:LOCALAPPDATA\CodexQuotaGuard\bin\orchestrator.exe"
-& $oq ui
-```
-
-The dashboard provides:
-
-- 5-hour and weekly quota cards;
-- running/paused/review task counts;
-- projects grouped by workspace;
-- project create/edit/archive/delete;
-- task search and filters by project/state;
-- editable task objective, project assignment and notes;
-- cooperative pause and cancel actions;
-- `NEEDS_REVIEW` recovery actions;
-- task state-event timeline;
-- terminal task deletion;
-- a **Task Queue** view for adding and ordering future work per project.
-
-Existing tasks with a workspace path are backfilled into projects the next time the daemon starts. New task registrations automatically create or reuse a project for their workspace.
-
-The dashboard has no separate runtime dependency: its HTML/CSS/JS assets are embedded into the Go binary.
-
-## Sequential project task queue
-
-Open **Task Queue** from the dashboard or browse to:
+Task Queue:
 
 ```text
 http://127.0.0.1:47631/queue.html
 ```
 
-Each project has an independent FIFO-style queue. You can add an objective and optional details/acceptance criteria while the current project task is still running.
+## Sequential project task queue
+
+Each project has an independent FIFO-style queue.
 
 Example:
 
@@ -82,179 +145,77 @@ QUEUED   Add GitHub Actions integration
 QUEUED   Improve README examples
 ```
 
-When `Implement SARIF output` calls `task_complete`, the daemon checks quota and project state. If quota is healthy, it dispatches `Add GitHub Actions integration` into the project's most recently completed Codex Desktop thread through the same crash-safe native action pipeline. When that task completes, the next queued item can start.
+When the current task calls `task_complete`, the daemon checks quota and project state. If quota is healthy, it dispatches the next queued task through the same crash-safe native delivery pipeline.
 
-Queue safety rules:
+Safety rules:
 
-- at most one queued work item runs per project;
-- the queue advances only after the previous managed task reaches `COMPLETED`;
+- at most one queued item runs per project;
+- the queue advances only after `COMPLETED`;
 - `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` stop automatic advancement;
-- low quota keeps future work in `QUEUED` until quota is resumable;
-- an uncertain native send marks the queue item `NEEDS_REVIEW` instead of blindly retrying;
-- a project that has never had a Codex Desktop thread keeps queued work waiting until a managed thread exists.
+- low quota keeps future work queued;
+- uncertain delivery becomes `NEEDS_REVIEW` instead of being blindly retried.
 
-Queue item lifecycle:
+Lifecycle:
 
 ```text
 QUEUED -> DISPATCHING -> RUNNING -> COMPLETED
                          |
-                         +-> NEEDS_REVIEW (uncertain delivery)
+                         +-> NEEDS_REVIEW
 ```
-
-Queued items may be edited, reordered, cancelled, or deleted before dispatch.
-
-## Important limitation
-
-There is no claimed stable hard-stop implementation for arbitrary active Desktop turns. Pause is cooperative and happens at model/tool safe boundaries.
-
-## Install on Windows
-
-### From a GitHub release
-
-Download and extract the Windows x64 ZIP, then run:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install-windows.ps1
-```
-
-The installer:
-
-- installs binaries to `%LOCALAPPDATA%\CodexQuotaGuard\bin`;
-- registers the `desktop-quota-guard` MCP companion globally;
-- installs a managed block in `~/.codex/AGENTS.md`;
-- creates the persistent relay executor if needed;
-- creates the per-user Scheduled Task `Codex Desktop Quota Guard`;
-- starts the daemon immediately.
-
-Fully quit and reopen Codex Desktop after installation.
-
-### From source
-
-The same installer builds automatically when `bin\orchestrator.exe` and `bin\desktop-companion.exe` are not present:
-
-```powershell
-.\scripts\install-windows.ps1
-```
-
-Use `-ForceBuild` to rebuild even when binaries already exist.
-
-## Everyday commands
-
-Installed CLI:
-
-```powershell
-$oq = "$env:LOCALAPPDATA\CodexQuotaGuard\bin\orchestrator.exe"
-& $oq ui
-& $oq status
-& $oq list
-& $oq doctor
-& $oq version
-```
-
-`status` gives the practical overview: daemon state, dashboard URL, latest 5-hour/weekly quota, thresholds, relay state and task counts.
-
-Starting `orchestrator daemon` while the configured daemon is already healthy is safe; it reports that the daemon is already running and exits successfully.
-
-## Dashboard API
-
-The embedded UI uses the daemon's local REST API:
-
-```text
-GET    /v1/dashboard
-GET    /v1/projects
-POST   /v1/projects
-GET    /v1/projects/{id}
-PATCH  /v1/projects/{id}
-DELETE /v1/projects/{id}
-GET    /v1/projects/{id}/tasks
-
-GET    /v1/dashboard/tasks
-GET    /v1/dashboard/tasks/{id}
-PATCH  /v1/dashboard/tasks/{id}
-DELETE /v1/dashboard/tasks/{id}
-GET    /v1/dashboard/tasks/{id}/events
-POST   /v1/dashboard/tasks/{id}/pause
-POST   /v1/dashboard/tasks/{id}/cancel
-POST   /v1/dashboard/tasks/{id}/retry
-POST   /v1/dashboard/tasks/{id}/running
-
-GET    /v1/project-tasks?projectId={id}
-POST   /v1/project-tasks
-GET    /v1/project-tasks/{id}
-PATCH  /v1/project-tasks/{id}
-DELETE /v1/project-tasks/{id}
-POST   /v1/project-tasks/{id}/cancel
-```
-
-Task state is not freely PATCHable. Lifecycle changes still go through the existing state machine.
 
 ## Manual recovery
 
-If a task becomes `NEEDS_REVIEW`, first inspect the destination Codex Desktop thread. You can resolve it from the dashboard or CLI:
+If a managed task becomes `NEEDS_REVIEW`, inspect the destination Desktop thread first, then use:
 
 ```powershell
-orchestrator recover --thread <threadId> --resolution retry
-orchestrator recover --thread <threadId> --resolution running
-orchestrator recover --thread <threadId> --resolution cancel
+orch recover --thread <threadId> --resolution retry
+orch recover --thread <threadId> --resolution running
+orch recover --thread <threadId> --resolution cancel
 ```
 
-- `retry`: use only when the previous continuation definitely did not arrive. The task returns to `PAUSED_QUOTA` and can be queued again when quota is healthy.
-- `running`: use when the continuation did arrive and the thread is already continuing.
-- `cancel`: abandon the managed task.
-
-The guard deliberately does not auto-retry an uncertain native send because Desktop may have accepted the message even if the response was lost.
+Use `retry` only when you confirmed the previous continuation did not arrive.
 
 ## Default policy
 
-- hard threshold: 5% remaining
-- soft pause: 10% remaining
-- auto resume: 20% remaining
-- quota poll: every 60 seconds
-- companion action poll: every 5 seconds
+```text
+hard threshold:  5%
+soft threshold: 10%
+resume:          20%
+quota poll:      60s
+companion poll:   5s
+```
 
-Override with `config.example.json`, `--config`, or supported `CDQG_*` environment variables.
+Manual commands support `--config`, and background configuration can also use supported `CDQG_*` environment variables.
 
 ## Project layout
 
 ```text
 cmd/
-  orchestrator/       daemon, dashboard launcher, quota doctor, status, recovery CLI
+  orchestrator/       daemon + CLI
   desktop-companion/  MCP server launched by Codex Desktop
+  setup/              native Windows installer/uninstaller
 internal/
-  codexquota/         quota-only app-server client
-  daemon/             quota monitor + local control/dashboard API + project queue scheduler
-  desktop/            Windows native Desktop delivery
-  mcpserver/          MCP tools + background action delivery
-  store/              SQLite persistence, projects/task metadata, project queues and action lifecycle
-  domain/             task/project/queue models and task states
-  quota/              deterministic policy
-  webui/              embedded local dashboard and task queue UI
-scripts/
-  install-windows.ps1
-  uninstall-windows.ps1
-  start-daemon.ps1
+  codexquota/         short-lived Codex app-server quota client
+  daemon/             monitor + API + queue scheduler
+  desktop/            native Desktop delivery
+  mcpserver/          MCP tools + action delivery
+  store/              SQLite persistence
+  domain/             task/project/queue models
+  quota/              policy
+  webui/              embedded dashboard
 .github/workflows/
   ci.yml
   release.yml
 ```
 
+Legacy PowerShell scripts may remain in the source tree for development/migration support, but they are not the canonical release install/uninstall flow.
+
 ## Docs
 
-- `docs/WINDOWS_SETUP.md` — installation and daily operation.
-- `docs/TROUBLESHOOTING.md` — daemon, native delivery, autostart and `NEEDS_REVIEW` recovery.
-- `docs/ARCHITECTURE.md` — Desktop-first design.
+- `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, background startup, and uninstall.
+- `docs/TROUBLESHOOTING.md` — daemon, native delivery, and recovery diagnostics.
+- `docs/ARCHITECTURE.md` — Desktop-first architecture.
 
-## Uninstall
+## Important limitation
 
-Keep SQLite task history and relay state:
-
-```powershell
-.\scripts\uninstall-windows.ps1
-```
-
-Remove state too:
-
-```powershell
-.\scripts\uninstall-windows.ps1 -PurgeData
-```
+Pause is cooperative at model/tool safe boundaries. The project does not claim a stable hard-interrupt API for arbitrary active Codex Desktop turns.
