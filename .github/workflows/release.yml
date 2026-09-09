@@ -1,0 +1,64 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build Windows x64
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'
+          New-Item -ItemType Directory -Force bin | Out-Null
+          go build -trimpath -ldflags "-s -w -X main.version=$version" -o bin/orchestrator.exe ./cmd/orchestrator
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -ldflags "-s -w" -o bin/desktop-companion.exe ./cmd/desktop-companion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Assemble package
+        shell: pwsh
+        run: |
+          $version = '${{ github.ref_name }}'
+          $package = "codex-quota-orchestrator-$version-windows-x64"
+          New-Item -ItemType Directory -Force "$package/bin" | Out-Null
+          New-Item -ItemType Directory -Force "$package/scripts" | Out-Null
+          New-Item -ItemType Directory -Force "$package/docs" | Out-Null
+          Copy-Item bin/orchestrator.exe "$package/bin/"
+          Copy-Item bin/desktop-companion.exe "$package/bin/"
+          Copy-Item scripts/install-windows.ps1 "$package/scripts/"
+          Copy-Item scripts/uninstall-windows.ps1 "$package/scripts/"
+          Copy-Item scripts/start-daemon.ps1 "$package/scripts/"
+          Copy-Item config.example.json "$package/"
+          Copy-Item README.md "$package/"
+          Copy-Item docs/WINDOWS_SETUP.md "$package/docs/"
+          Copy-Item docs/ARCHITECTURE.md "$package/docs/"
+          Copy-Item docs/TROUBLESHOOTING.md "$package/docs/"
+          Compress-Archive -Path "$package/*" -DestinationPath "$package.zip" -Force
+          Get-FileHash "$package.zip" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $package.zip" } | Set-Content "$package.zip.sha256"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            codex-quota-orchestrator-${{ github.ref_name }}-windows-x64.zip
+            codex-quota-orchestrator-${{ github.ref_name }}-windows-x64.zip.sha256
