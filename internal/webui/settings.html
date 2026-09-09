@@ -24,9 +24,9 @@
       <div class="field"><label>Hard threshold (%)</label><input id="hard" class="input" type="number" min="0" max="100" step="1"></div>
       <div class="field"><label>Soft threshold (%)</label><input id="soft" class="input" type="number" min="0" max="100" step="1"></div>
       <div class="field"><label>Resume threshold (%)</label><input id="resume" class="input" type="number" min="0" max="100" step="1"></div>
-      <div class="switch"><input id="autoDispatch" type="checkbox"><label for="autoDispatch">Automatically dispatch the next queued project task</label></div>
+      <div class="switch"><input id="autoDispatch" type="checkbox"><label for="autoDispatch">Enable automatic project queue dispatch globally</label></div>
     </div>
-    <div class="hint">Thresholds must satisfy hard &lt; soft &lt; resume. Auto dispatch only advances after a successful COMPLETED task and healthy quota.</div>
+    <div class="hint">Thresholds must satisfy hard &lt; soft &lt; resume. Global auto dispatch is the master switch for projects in AUTO mode. MANUAL projects use Start now; PAUSED projects block new queue dispatch.</div>
   </div>
   <div class="card">
     <h3>Monitoring</h3>
