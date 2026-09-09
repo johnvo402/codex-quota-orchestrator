@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -58,17 +57,34 @@ ON task_metadata(project_id,archived);
 	return err
 }
 
+// Workspace paths come from Codex Desktop and may use Windows separators even
+// when the daemon code is being built or tested on Linux. Keep their native
+// representation and only remove redundant trailing separators.
 func normalizeWorkspacePath(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" {
 		return ""
 	}
-	return filepath.Clean(v)
+	for len(v) > 1 && (strings.HasSuffix(v, `\`) || strings.HasSuffix(v, "/")) {
+		// Keep Windows drive roots such as C:\ intact.
+		if len(v) == 3 && v[1] == ':' {
+			break
+		}
+		v = v[:len(v)-1]
+	}
+	return v
 }
 
-func defaultProjectName(path string) string {
-	name := strings.TrimSpace(filepath.Base(path))
-	if name == "" || name == "." || name == string(filepath.Separator) {
+func defaultProjectName(workspace string) string {
+	name := strings.TrimRight(strings.TrimSpace(workspace), `\/`)
+	if name == "" {
+		return "Workspace"
+	}
+	if i := strings.LastIndexAny(name, `\/`); i >= 0 {
+		name = name[i+1:]
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || strings.HasSuffix(name, ":") {
 		return "Workspace"
 	}
 	return name
