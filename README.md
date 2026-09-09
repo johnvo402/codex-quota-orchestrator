@@ -15,6 +15,7 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Project/workspace grouping and sequential project task queues.
 - Embedded local dashboard with task/project management and Settings.
 - Shared persisted configuration for daemon, companion, and CLI.
+- Graceful daemon restart from Settings or `orch restart`.
 - `orch` CLI installed on the current user's PATH.
 - Inno Setup based Windows installer/uninstaller.
 - Hidden Windows background daemon with per-user autostart.
@@ -118,6 +119,7 @@ orch teardown
 orch config show
 orch config path
 orch config validate
+orch restart
 orch status
 orch ui
 orch list
@@ -172,12 +174,21 @@ GET /v1/settings
 PUT /v1/settings
 ```
 
-Writes use a temporary file and replace `config.json` only after the new content is fully written. Changes currently require restarting the quota daemon; reopen Codex Desktop as well so its companion reloads the same config.
+Writes use a temporary file and replace `config.json` only after the new content is fully written. When persisted settings differ from the running daemon, Settings shows a **Restart daemon** button. The same operation is available from the CLI:
+
+```powershell
+orch restart
+```
+
+Restart is a graceful handoff: the running daemon starts a hidden replacement process, returns the accepted control request, shuts down its HTTP server, and the replacement waits for the predecessor health endpoint to disappear before binding with the saved configuration. No `taskkill` is used.
+
+If the companion poll setting changes, fully reopen Codex Desktop as well so `desktop-companion.exe` reloads the shared configuration.
 
 Explicit configuration remains supported:
 
 ```powershell
 orch status --config C:\path\to\config.json
+orch restart --config C:\path\to\config.json
 orch config --config C:\path\to\config.json show
 ```
 
