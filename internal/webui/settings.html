@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Codex Quota Guard Settings</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e5e7eb;background:#0b1020}*{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0b1020,#111827 45%,#0b1020);min-height:100vh}.wrap{max-width:880px;margin:auto;padding:24px}.top{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px}.title{font-size:28px;font-weight:800}.muted{color:#94a3b8}.card{background:#111827;border:1px solid #263249;border-radius:16px;padding:18px;margin-bottom:16px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.field label{display:block;font-size:12px;color:#94a3b8;font-weight:700;margin-bottom:6px}.input{width:100%;background:#0e1628;border:1px solid #31415f;color:#e5e7eb;border-radius:10px;padding:10px 11px}.btn{border:1px solid #31415f;background:#172036;color:#e5e7eb;padding:9px 12px;border-radius:10px;cursor:pointer;font-weight:650;text-decoration:none}.btn.primary{background:#2563eb;border-color:#2563eb}.actions{display:flex;justify-content:flex-end;gap:10px}.switch{display:flex;align-items:center;gap:10px;padding-top:24px}.notice{display:none;padding:12px 14px;border-radius:10px;margin-bottom:16px}.notice.show{display:block}.notice.ok{background:#123b2a;border:1px solid #166534;color:#bbf7d0}.notice.warn{background:#422006;border:1px solid #92400e;color:#fde68a}.notice.err{background:#3b1515;border:1px solid #991b1b;color:#fecaca}.path{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;word-break:break-all;color:#cbd5e1}.hint{font-size:12px;line-height:1.5;color:#94a3b8;margin-top:8px}@media(max-width:700px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}.switch{padding-top:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="title">Settings</div><div class="muted">Shared daemon, companion, and CLI configuration</div></div>
+    <div><a class="btn" href="/queue.html">Task Queue</a> <a class="btn" href="/">Dashboard</a></div>
+  </div>
+  <div id="notice" class="notice"></div>
+  <div class="card">
+    <div class="field"><label>Config file</label><div id="configPath" class="path">Loading…</div></div>
+  </div>
+  <div class="card">
+    <h3>Quota policy</h3>
+    <div class="grid">
+      <div class="field"><label>Hard threshold (%)</label><input id="hard" class="input" type="number" min="0" max="100" step="1"></div>
+      <div class="field"><label>Soft threshold (%)</label><input id="soft" class="input" type="number" min="0" max="100" step="1"></div>
+      <div class="field"><label>Resume threshold (%)</label><input id="resume" class="input" type="number" min="0" max="100" step="1"></div>
+      <div class="switch"><input id="autoDispatch" type="checkbox"><label for="autoDispatch">Automatically dispatch the next queued project task</label></div>
+    </div>
+    <div class="hint">Thresholds must satisfy hard &lt; soft &lt; resume. Auto dispatch only advances after a successful COMPLETED task and healthy quota.</div>
+  </div>
+  <div class="card">
+    <h3>Monitoring</h3>
+    <div class="grid">
+      <div class="field"><label>Quota poll interval (seconds)</label><input id="poll" class="input" type="number" min="10" step="1"></div>
+      <div class="field"><label>Companion poll interval (seconds)</label><input id="companionPoll" class="input" type="number" min="1" step="1"></div>
+      <div class="field"><label>Codex request timeout (seconds)</label><input id="timeout" class="input" type="number" min="1" step="1"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Server</h3>
+    <div class="field"><label>Listen address</label><input id="listen" class="input" autocomplete="off"></div>
+    <div class="hint">Changing the listen address changes the dashboard/API address after restart. Keep it on loopback unless you intentionally secure remote access.</div>
+  </div>
+  <div class="actions"><button class="btn" onclick="load()">Reset</button><button id="save" class="btn primary" onclick="save()">Save settings</button></div>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+async function api(path,opts={}){const r=await fetch(path,{headers:{'Content-Type':'application/json',...(opts.headers||{})},...opts});let body=null;const text=await r.text();if(text){try{body=JSON.parse(text)}catch{body=text}}if(!r.ok)throw new Error(body?.error||body||r.statusText);return body}
+function notice(message,type='ok'){const n=$('#notice');n.textContent=message;n.className='notice show '+type}
+function num(id){return Number($(id).value)}
+function fill(x){const c=x.config;$('#configPath').textContent=x.configPath;$('#hard').value=c.hardThresholdPercent;$('#soft').value=c.softThresholdPercent;$('#resume').value=c.resumeThresholdPercent;$('#poll').value=c.pollIntervalSeconds;$('#companionPoll').value=c.companionPollSeconds;$('#timeout').value=c.requestTimeoutSeconds;$('#listen').value=c.listenAddr;$('#autoDispatch').checked=!!c.autoDispatch}
+async function load(){try{fill(await api('/v1/settings'));$('#notice').className='notice'}catch(e){notice(e.message,'err')}}
+async function save(){const b=$('#save');b.disabled=true;try{const out=await api('/v1/settings',{method:'PUT',body:JSON.stringify({listenAddr:$('#listen').value.trim(),hardThresholdPercent:num('#hard'),softThresholdPercent:num('#soft'),resumeThresholdPercent:num('#resume'),pollIntervalSeconds:num('#poll'),companionPollSeconds:num('#companionPoll'),requestTimeoutSeconds:num('#timeout'),autoDispatch:$('#autoDispatch').checked})});fill(out);notice(out.restartRequired?'Settings saved. Restart the quota daemon and reopen Codex Desktop to apply all changes.':'Settings saved.','warn')}catch(e){notice(e.message,'err')}finally{b.disabled=false}}
+load();
+</script>
+</body>
+</html>
