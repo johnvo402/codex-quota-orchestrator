@@ -49,14 +49,14 @@ func Run(ctx context.Context, cfg config.Config) Report {
 		checkConfig(cfg),
 		checkDaemon(ctx, cfg),
 		checkRuntime(ctx, cfg),
-		checkDatabase(ctx, cfg),
-		checkCompanion(),
 	)
+	r.Checks = append(r.Checks, checkDatabaseAndQueue(ctx, cfg)...)
+	r.Checks = append(r.Checks, checkCompanion())
 
 	cliPath, cliCheck := checkCodexCLI(cfg)
 	r.Checks = append(r.Checks, cliCheck)
 	if cliCheck.Status == StatusPass {
-		r.Checks = append(r.Checks, checkMCP(ctx, cfg, cliPath))
+		r.Checks = append(r.Checks, checkMCP(ctx, cliPath))
 		r.Checks = append(r.Checks, checkQuota(ctx, cfg))
 	} else {
 		r.Checks = append(r.Checks,
@@ -83,10 +83,6 @@ func overallStatus(checks []Check) Status {
 			return StatusFail
 		case StatusWarn:
 			overall = StatusWarn
-		case StatusUnknown:
-			if overall == StatusPass {
-				overall = StatusWarn
-			}
 		}
 	}
 	return overall
@@ -124,31 +120,48 @@ func checkRuntime(ctx context.Context, cfg config.Config) Check {
 	return Check{ID: "runtime", Name: "Runtime metadata", Status: status, Summary: summary, Details: map[string]any{"listenAddr": v.ListenAddr, "pid": v.PID, "startedAt": v.StartedAt}}
 }
 
-func checkDatabase(ctx context.Context, cfg config.Config) Check {
+func checkDatabaseAndQueue(ctx context.Context, cfg config.Config) []Check {
 	if _, err := os.Stat(cfg.DBPath()); errors.Is(err, os.ErrNotExist) {
-		return Check{ID: "database", Name: "SQLite", Status: StatusWarn, Summary: "State database has not been initialized", Details: map[string]any{"path": cfg.DBPath()}}
+		return []Check{
+			{ID: "database", Name: "SQLite", Status: StatusWarn, Summary: "State database has not been initialized", Details: map[string]any{"path": cfg.DBPath()}},
+			{ID: "queue_integrity", Name: "Queue integrity", Status: StatusUnknown, Summary: "State database has not been initialized"},
+		}
 	} else if err != nil {
-		return Check{ID: "database", Name: "SQLite", Status: StatusFail, Summary: err.Error(), Details: map[string]any{"path": cfg.DBPath()}}
+		return []Check{
+			{ID: "database", Name: "SQLite", Status: StatusFail, Summary: err.Error(), Details: map[string]any{"path": cfg.DBPath()}},
+			{ID: "queue_integrity", Name: "Queue integrity", Status: StatusUnknown, Summary: "SQLite is unavailable"},
+		}
 	}
 
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
-		return Check{ID: "database", Name: "SQLite", Status: StatusFail, Summary: err.Error(), Details: map[string]any{"path": cfg.DBPath()}}
+		return []Check{
+			{ID: "database", Name: "SQLite", Status: StatusFail, Summary: err.Error(), Details: map[string]any{"path": cfg.DBPath()}},
+			{ID: "queue_integrity", Name: "Queue integrity", Status: StatusUnknown, Summary: "SQLite is unavailable"},
+		}
 	}
 	defer st.Close()
 
 	tasks, err := st.ListTasks(ctx)
 	if err != nil {
-		return Check{ID: "database", Name: "SQLite", Status: StatusFail, Summary: "Cannot read managed tasks: " + err.Error()}
+		return []Check{
+			{ID: "database", Name: "SQLite", Status: StatusFail, Summary: "Cannot read managed tasks: " + err.Error()},
+			{ID: "queue_integrity", Name: "Queue integrity", Status: StatusUnknown, Summary: "SQLite task read failed"},
+		}
 	}
 	projects, err := st.ListProjects(ctx, true)
 	if err != nil {
-		return Check{ID: "database", Name: "SQLite", Status: StatusFail, Summary: "Cannot read projects: " + err.Error()}
+		return []Check{
+			{ID: "database", Name: "SQLite", Status: StatusFail, Summary: "Cannot read projects: " + err.Error()},
+			{ID: "queue_integrity", Name: "Queue integrity", Status: StatusUnknown, Summary: "SQLite project read failed"},
+		}
 	}
+
+	dbCheck := Check{ID: "database", Name: "SQLite", Status: StatusPass, Summary: "State database is readable", Details: map[string]any{"path": cfg.DBPath(), "tasks": len(tasks), "projects": len(projects)}}
 	if err := checkQueueIntegrity(ctx, st, projects); err != nil {
-		return Check{ID: "database", Name: "SQLite / queue integrity", Status: StatusFail, Summary: err.Error(), Details: map[string]any{"tasks": len(tasks), "projects": len(projects)}}
+		return []Check{dbCheck, {ID: "queue_integrity", Name: "Queue integrity", Status: StatusFail, Summary: err.Error()}}
 	}
-	return Check{ID: "database", Name: "SQLite / queue integrity", Status: StatusPass, Summary: "Readable; queued positions are normalized", Details: map[string]any{"path": cfg.DBPath(), "tasks": len(tasks), "projects": len(projects)}}
+	return []Check{dbCheck, {ID: "queue_integrity", Name: "Queue integrity", Status: StatusPass, Summary: "Queued positions are normalized 1..N", Details: map[string]any{"projects": len(projects)}}}
 }
 
 func checkQueueIntegrity(ctx context.Context, st *store.Store, projects []domain.Project) error {
@@ -193,7 +206,7 @@ func checkCodexCLI(cfg config.Config) (string, Check) {
 	return path, Check{ID: "codex_cli", Name: "Codex CLI", Status: StatusPass, Summary: "Found", Details: map[string]any{"path": path}}
 }
 
-func checkMCP(ctx context.Context, cfg config.Config, cliPath string) Check {
+func checkMCP(ctx context.Context, cliPath string) Check {
 	cmdCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(cmdCtx, cliPath, "mcp", "list")
@@ -234,7 +247,7 @@ func checkQuota(ctx context.Context, cfg config.Config) Check {
 		Name:    "Quota provider",
 		Status:  StatusPass,
 		Summary: "Codex account and rate limits are readable",
-		Details: map[string]any{"email": acct.Account.Email, "plan": acct.Account.PlanType, "rateLimits": rates.RateLimits},
+		Details: map[string]any{"plan": acct.Account.PlanType, "rateLimits": rates.RateLimits},
 	}
 }
 
