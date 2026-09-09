@@ -154,16 +154,22 @@ func (s *Store) NextQueuedProjectTask(ctx context.Context, projectID string) (do
 }
 
 func (s *Store) ProjectDispatchThread(ctx context.Context, projectID string) (string, error) {
-	var threadID string
+	var threadID, stateRaw string
 	err := s.db.QueryRowContext(ctx, `
-SELECT t.thread_id
+SELECT t.thread_id,t.state
 FROM tasks t
 JOIN task_metadata m ON m.task_id=t.id
 WHERE m.project_id=?
 ORDER BY t.updated_at DESC
 LIMIT 1
-`, projectID).Scan(&threadID)
-	return threadID, err
+`, projectID).Scan(&threadID, &stateRaw)
+	if err != nil {
+		return "", err
+	}
+	if domain.TaskState(stateRaw) != domain.StateCompleted {
+		return "", fmt.Errorf("latest project task is %s; queue waits for COMPLETED", stateRaw)
+	}
+	return threadID, nil
 }
 
 func (s *Store) QueueProjectTaskDispatch(ctx context.Context, itemID, threadID, message string) (Action, error) {
@@ -208,25 +214,6 @@ func isProjectTaskAction(kind string) bool {
 func (s *Store) CompleteRunningProjectTaskByThread(ctx context.Context, threadID string) error {
 	now := time.Now().UTC().UnixMilli()
 	_, err := s.db.ExecContext(ctx, `UPDATE project_tasks SET state='COMPLETED',updated_at=?,completed_at=? WHERE target_thread_id=? AND state='RUNNING'`, now, now, threadID)
-	return err
-}
-
-func (s *Store) ReactivateManagedTask(ctx context.Context, threadID, objective string) error {
-	var taskID, stateRaw string
-	if err := s.db.QueryRowContext(ctx, `SELECT id,state FROM tasks WHERE thread_id=?`, threadID).Scan(&taskID, &stateRaw); err != nil {
-		return err
-	}
-	from := domain.TaskState(stateRaw)
-	switch from {
-	case domain.StateCompleted, domain.StateFailed, domain.StateCancelled:
-	default:
-		return nil
-	}
-	now := time.Now().UTC().UnixMilli()
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET state=?,objective=?,pause_reason='',checkpoint='',pending='',last_test='',updated_at=? WHERE thread_id=?`, domain.StateRunning, objective, now, threadID); err != nil {
-		return err
-	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO task_events(task_id,from_state,to_state,reason,created_at) VALUES(?,?,?,?,?)`, taskID, from, domain.StateRunning, "project queue dispatched next task", now)
 	return err
 }
 
