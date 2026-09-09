@@ -3,9 +3,7 @@ name: Tag Release
 on:
   push:
     branches:
-      - dev
-    paths:
-      - .release-version
+      - main
 
 permissions:
   contents: write
@@ -15,7 +13,7 @@ jobs:
   tag-release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -33,6 +31,7 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Create tag if needed
+        id: tag
         shell: bash
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -40,20 +39,23 @@ jobs:
           set -euo pipefail
           git fetch --tags --force
           if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag already exists: $TAG"
+            echo "Tag already exists: $TAG; nothing to release."
+            echo "created=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" "$GITHUB_SHA" -m "Release $TAG"
           git push origin "$TAG"
+          echo "created=true" >> "$GITHUB_OUTPUT"
 
       - name: Dispatch release workflow
+        if: steps.tag.outputs.created == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref dev -f tag="$TAG"
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref main -f tag="$TAG"
           echo "Release workflow dispatched for $TAG"
