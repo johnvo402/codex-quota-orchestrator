@@ -68,6 +68,8 @@ func run() error {
 		return setupCodexIntegration(cfg)
 	case "teardown":
 		return teardownCodexIntegration()
+	case "config":
+		return configCommand(cfg, fs.Args(), *jsonOut)
 	case "doctor":
 		return doctor(cfg, *jsonOut)
 	case "relay-init":
@@ -329,6 +331,7 @@ func status(cfg config.Config, jsonOut bool) error {
 	fmt.Printf("Daemon:        %s (%s)\n", yesNo(daemonHealthy(cfg), "running", "stopped"), cfg.ListenAddr)
 	fmt.Printf("Dashboard:     %s/\n", cfg.BaseURL())
 	fmt.Printf("Data:          %s\n", cfg.DataDir)
+	fmt.Printf("Config:        %s\n", cfg.ConfigPath())
 	if qErr == nil {
 		fmt.Printf("Quota 5h:      %s\n", windowRemaining(q.FiveHour))
 		fmt.Printf("Quota weekly:  %s\n", windowRemaining(q.Weekly))
@@ -336,6 +339,7 @@ func status(cfg config.Config, jsonOut bool) error {
 	} else {
 		fmt.Println("Quota:         not sampled yet")
 	}
+	fmt.Printf("Auto dispatch: %t\n", cfg.AutoDispatch)
 	fmt.Printf("Relay:         %s\n", yesNo(relayErr == nil, "configured", "not configured"))
 	fmt.Printf("Managed tasks: %d\n", len(items))
 
@@ -419,9 +423,10 @@ func trim(s string, n int) string {
 }
 
 func usage() {
-	fmt.Println("orchestrator <setup|teardown|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("orchestrator <setup|teardown|config|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
 	fmt.Println("  setup                                   Configure Codex MCP, AGENTS.md, and relay")
 	fmt.Println("  teardown                                Remove Codex MCP and managed AGENTS.md block")
+	fmt.Println("  config [show|path|validate]              Inspect shared configuration")
 	fmt.Println("  ui                                      Open local dashboard")
 	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
 }
