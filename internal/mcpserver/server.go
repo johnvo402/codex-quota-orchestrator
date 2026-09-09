@@ -38,6 +38,7 @@ type request struct {
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
 }
+
 type callParams struct {
 	Name      string         `json:"name"`
 	Arguments map[string]any `json:"arguments"`
@@ -111,21 +112,14 @@ func toolList() []any {
 		tool("desktop_native_test_send", "Send a test message to a Codex Desktop thread through the native Desktop tools pipe. Debug only.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"targetThreadId": map[string]any{
-					"type":        "string",
-					"description": "Destination Codex Desktop thread ID.",
-				},
-				"message": map[string]any{
-					"type":        "string",
-					"description": "Optional test message.",
-				},
+				"targetThreadId": map[string]any{"type": "string", "description": "Destination Codex Desktop thread ID."},
+				"message":        map[string]any{"type": "string", "description": "Optional test message."},
 			},
-			"required": []string{
-				"targetThreadId",
-			},
+			"required": []string{"targetThreadId"},
 		}),
 	}
 }
+
 func tool(name, desc string, schema any) any {
 	return map[string]any{"name": name, "description": desc, "inputSchema": schema}
 }
@@ -138,6 +132,7 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 	if thread == "" {
 		return toolError("Codex did not provide threadId metadata. This tool must run inside a Codex Desktop task."), nil
 	}
+
 	switch p.Name {
 	case "desktop_task_register":
 		objective := strArg(p.Arguments, "objective")
@@ -150,77 +145,59 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 			return toolError("Guard daemon unavailable: " + err.Error()), nil
 		}
 		return toolOK(fmt.Sprintf("Task registered. thread=%s state=%s. Call quota_check before substantial new phases.", t.ThreadID, t.State), map[string]any{"task": t}), nil
+
 	case "quota_check":
 		q, d, err := s.daemon.quota(ctx)
 		if err != nil {
 			return toolError("Guard daemon unavailable: " + err.Error()), nil
 		}
-		text := fmt.Sprintf(
-			"%s; action=%s; reason=%s",
-			describeQuota(q),
-			d.Action,
-			d.Reason,
-		)
+		text := fmt.Sprintf("%s; action=%s; reason=%s", describeQuota(q), d.Action, d.Reason)
 		if d.Action == "pause" {
 			text += ". Reach a safe boundary, checkpoint, call task_mark_paused, then finish this turn."
 		}
 		return toolOK(text, map[string]any{"quota": q, "decision": d}), nil
+
 	case "task_checkpoint":
 		if err := s.daemon.checkpoint(ctx, thread, strArg(p.Arguments, "summary"), strArg(p.Arguments, "pending"), strArg(p.Arguments, "lastTest")); err != nil {
 			return toolError(err.Error()), nil
 		}
 		return toolOK("Checkpoint saved.", nil), nil
+
 	case "task_mark_paused":
 		if err := s.daemon.paused(ctx, thread, first(strArg(p.Arguments, "reason"), "quota")); err != nil {
 			return toolError(err.Error()), nil
 		}
 		return toolOK("Task is PAUSED_QUOTA. Finish this turn now; the companion will resume this Desktop thread when quota recovers.", nil), nil
+
 	case "task_complete":
 		if err := s.daemon.complete(ctx, thread, strArg(p.Arguments, "summary")); err != nil {
 			return toolError(err.Error()), nil
 		}
 		return toolOK("Task marked completed.", nil), nil
+
 	case "desktop_guard_status":
 		q, d, err := s.daemon.quota(ctx)
-
 		if err != nil {
 			return toolError(err.Error()), nil
 		}
-
-		relay, relayErr := desktop.LoadRelay(
-			s.cfg.RelayPath(),
-		)
-
+		relay, relayErr := desktop.LoadRelay(s.cfg.RelayPath())
 		var sender desktop.NativeSender
-
 		if relayErr == nil {
-			sender = desktop.NewNativeSender(
-				relay.ExecutorThreadID,
-			)
+			sender = desktop.NewNativeSender(relay.ExecutorThreadID)
 		}
-
 		nativeConfigured := false
 		nativeReachable := false
 		nativeDescription := "relay not configured"
 		nativeProbeError := ""
-
 		var diagnostics any
-
 		if sender != nil {
 			nativeConfigured = sender.Available()
 			nativeDescription = sender.Description()
 			diagnostics = sender.Diagnostics()
-
 			if nativeConfigured {
-				probeCtx, cancel := context.WithTimeout(
-					ctx,
-					5*time.Second,
-				)
-
+				probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 				probeErr := sender.Probe(probeCtx)
-
 				cancel()
-
 				if probeErr == nil {
 					nativeReachable = true
 				} else {
@@ -228,113 +205,48 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 				}
 			}
 		}
-
 		return toolOK(
-			fmt.Sprintf(
-				"%s; action=%s; nativeConfigured=%v; nativeReachable=%v; %s",
-				describeQuota(q),
-				d.Action,
-				nativeConfigured,
-				nativeReachable,
-				nativeDescription,
-			),
+			fmt.Sprintf("%s; action=%s; nativeConfigured=%v; nativeReachable=%v; %s", describeQuota(q), d.Action, nativeConfigured, nativeReachable, nativeDescription),
 			map[string]any{
-				"quota":    q,
-				"decision": d,
-
-				"nativeAvailable":  nativeReachable,
-				"nativeConfigured": nativeConfigured,
-				"nativeReachable":  nativeReachable,
-
-				"nativeDescription": nativeDescription,
-				"nativeProbeError":  nativeProbeError,
-				"nativeDiagnostics": diagnostics,
+				"quota": q, "decision": d,
+				"nativeAvailable": nativeReachable, "nativeConfigured": nativeConfigured, "nativeReachable": nativeReachable,
+				"nativeDescription": nativeDescription, "nativeProbeError": nativeProbeError, "nativeDiagnostics": diagnostics,
 			},
 		), nil
+
 	case "desktop_native_test_send":
 		targetThreadID, _ := p.Arguments["targetThreadId"].(string)
 		targetThreadID = strings.TrimSpace(targetThreadID)
-
 		if targetThreadID == "" {
-			return toolError(
-				"targetThreadId is required",
-			), nil
+			return toolError("targetThreadId is required"), nil
 		}
-
 		message, _ := p.Arguments["message"].(string)
 		message = strings.TrimSpace(message)
-
 		if message == "" {
-			message =
-				"[Desktop Quota Guard] Native delivery test succeeded. " +
-					"This message was sent through the Codex Desktop native tools pipe."
+			message = "[Desktop Quota Guard] Native delivery test succeeded. This message was sent through the Codex Desktop native tools pipe."
 		}
-
-		relay, err := desktop.LoadRelay(
-			s.cfg.RelayPath(),
-		)
-
+		relay, err := desktop.LoadRelay(s.cfg.RelayPath())
 		if err != nil {
-			return toolError(
-				"relay unavailable: " + err.Error(),
-			), nil
+			return toolError("relay unavailable: " + err.Error()), nil
 		}
-
-		sender := desktop.NewNativeSender(
-			relay.ExecutorThreadID,
-		)
-
+		sender := desktop.NewNativeSender(relay.ExecutorThreadID)
 		if !sender.Available() {
-			return toolError(
-				"native Desktop delivery unavailable: " +
-					sender.Description(),
-			), nil
+			return toolError("native Desktop delivery unavailable: " + sender.Description()), nil
 		}
-
-		probeCtx, cancel := context.WithTimeout(
-			ctx,
-			5*time.Second,
-		)
-
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		err = sender.Probe(probeCtx)
-
 		cancel()
-
 		if err != nil {
-			return toolError(
-				"native Desktop probe failed: " +
-					err.Error(),
-			), nil
+			return toolError("native Desktop probe failed: " + err.Error()), nil
 		}
-
-		sendCtx, cancel := context.WithTimeout(
-			ctx,
-			20*time.Second,
-		)
-
-		err = sender.SendMessage(
-			sendCtx,
-			targetThreadID,
-			message,
-		)
-
+		sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err = sender.SendMessage(sendCtx, targetThreadID, message)
 		cancel()
-
 		if err != nil {
-			return toolError(
-				"native Desktop send failed: " +
-					err.Error(),
-			), nil
+			return toolError("native Desktop send failed: " + err.Error()), nil
 		}
+		return toolOK("Native Desktop test message sent successfully.", map[string]any{"success": true, "targetThreadId": targetThreadID, "native": sender.Diagnostics()}), nil
 
-		return toolOK(
-			"Native Desktop test message sent successfully.",
-			map[string]any{
-				"success":        true,
-				"targetThreadId": targetThreadID,
-				"native":         sender.Diagnostics(),
-			},
-		), nil
 	default:
 		return toolError("unknown tool " + p.Name), nil
 	}
@@ -352,108 +264,61 @@ func (s *Server) actionPump(ctx context.Context) {
 		}
 	}
 }
-func (s *Server) deliverPending(
-	ctx context.Context,
-) {
-	relay, err := desktop.LoadRelay(
-		s.cfg.RelayPath(),
-	)
 
+func (s *Server) deliverPending(ctx context.Context) {
+	relay, err := desktop.LoadRelay(s.cfg.RelayPath())
 	if err != nil {
 		return
 	}
-
-	sender := desktop.NewNativeSender(
-		relay.ExecutorThreadID,
-	)
-
+	sender := desktop.NewNativeSender(relay.ExecutorThreadID)
 	if !sender.Available() {
 		return
 	}
-
 	actions, err := s.daemon.actions(ctx)
-
 	if err != nil {
 		return
 	}
 
 	for _, action := range actions {
-		// Probe trước khi gửi.
-		probeCtx, cancel := context.WithTimeout(
-			ctx,
-			5*time.Second,
-		)
-
+		// Probe happens before claim. If Desktop is unavailable, the action stays
+		// pending and can be attempted safely on a later poll.
+		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		probeErr := sender.Probe(probeCtx)
 		cancel()
-
 		if probeErr != nil {
-			s.log.Warn(
-				"Desktop native probe failed",
-				"action", action.ID,
-				"error", probeErr,
-			)
-
-			// Không ack.
-			// Giữ pending để lần poll sau thử lại.
+			s.log.Warn("Desktop native probe failed", "action", action.ID, "error", probeErr)
 			continue
 		}
 
-		sendCtx, cancel := context.WithTimeout(
-			ctx,
-			20*time.Second,
-		)
+		// Claim atomically before the external side effect. A second companion
+		// will receive conflict and must not send the same action.
+		if err := s.daemon.claim(ctx, action.ID); err != nil {
+			s.log.Debug("Desktop action already claimed", "action", action.ID, "error", err)
+			continue
+		}
 
-		err := sender.SendMessage(
-			sendCtx,
-			action.ThreadID,
-			action.Message,
-		)
-
+		sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		err := sender.SendMessage(sendCtx, action.ThreadID, action.Message)
 		cancel()
-
 		if err != nil {
-			s.log.Warn(
-				"Desktop native delivery failed",
-				"action", action.ID,
-				"thread", action.ThreadID,
-				"error", err,
-			)
-
-			// Delivery thật sự được attempted nhưng fail.
-			// Ack failed để task quay về PAUSED_QUOTA,
-			// scheduler có thể retry ở tick sau.
-			_ = s.daemon.ack(
-				ctx,
-				action.ID,
-				false,
-				err.Error(),
-			)
-
+			s.log.Warn("Desktop native delivery outcome uncertain", "action", action.ID, "thread", action.ThreadID, "error", err)
+			// Once SendMessage has been attempted, retrying automatically is unsafe:
+			// Desktop may have accepted the message while the response was lost.
+			if markErr := s.daemon.uncertain(ctx, action.ID, "native send was attempted but the outcome could not be confirmed: "+err.Error()); markErr != nil {
+				s.log.Error("mark Desktop action uncertain failed", "action", action.ID, "error", markErr)
+			}
 			continue
 		}
 
-		if err := s.daemon.ack(
-			ctx,
-			action.ID,
-			true,
-			"",
-		); err != nil {
-			s.log.Error(
-				"ack Desktop action failed",
-				"action", action.ID,
-				"error", err,
-			)
-
+		if err := s.daemon.ack(ctx, action.ID, true, ""); err != nil {
+			// The message was definitely accepted according to the native response,
+			// but durable acknowledgement failed. Do not resend it. The action remains
+			// delivering and startup/periodic recovery will move it to NEEDS_REVIEW.
+			s.log.Error("resume delivered but durable ack failed; leaving delivery for recovery", "action", action.ID, "error", err)
 			continue
 		}
 
-		s.log.Info(
-			"Desktop action delivered",
-			"action", action.ID,
-			"kind", action.Kind,
-			"thread", action.ThreadID,
-		)
+		s.log.Info("Desktop action delivered", "action", action.ID, "kind", action.Kind, "thread", action.ThreadID)
 	}
 }
 
@@ -479,19 +344,23 @@ func extractIdentity(meta map[string]any) (thread, turn string) {
 	}
 	return
 }
+
 func asString(v any) string { s, _ := v.(string); return s }
+
 func strArg(m map[string]any, k string) string {
 	if m == nil {
 		return ""
 	}
 	return strings.TrimSpace(asString(m[k]))
 }
+
 func first(a, b string) string {
 	if a != "" {
 		return a
 	}
 	return b
 }
+
 func toolOK(text string, structured any) any {
 	r := map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": false}
 	if structured != nil {
@@ -499,6 +368,7 @@ func toolOK(text string, structured any) any {
 	}
 	return r
 }
+
 func toolError(text string) any {
 	return map[string]any{"content": []any{map[string]any{"type": "text", "text": text}}, "isError": true}
 }
@@ -507,21 +377,12 @@ var _ = errors.New
 var _ = os.Stderr
 
 func describeQuota(q quota.Snapshot) string {
-	return fmt.Sprintf(
-		"5h=%s; weekly=%s; effective=%.0f%%",
-		describeWindow(q.FiveHour),
-		describeWindow(q.Weekly),
-		q.RemainingPercent,
-	)
+	return fmt.Sprintf("5h=%s; weekly=%s; effective=%.0f%%", describeWindow(q.FiveHour), describeWindow(q.Weekly), q.RemainingPercent)
 }
 
 func describeWindow(w quota.Window) string {
 	if !w.Available {
 		return "unavailable"
 	}
-
-	return fmt.Sprintf(
-		"%.0f%%",
-		w.RemainingPercent,
-	)
+	return fmt.Sprintf("%.0f%%", w.RemainingPercent)
 }
