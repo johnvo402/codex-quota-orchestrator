@@ -114,10 +114,12 @@ Write-Host ''
 Write-Host 'Installation complete.'
 Write-Host "Installed binaries: $installBin"
 Write-Host "Autostart task:      $taskName"
+Write-Host "Dashboard:           http://127.0.0.1:47631/"
 Write-Host ''
 Write-Host 'Fully quit and reopen Codex Desktop so it reloads the MCP server.'
 Write-Host ''
 Write-Host 'Useful commands:'
+Write-Host "  & '$orchestrator' ui"
 Write-Host "  & '$orchestrator' status"
 Write-Host "  & '$orchestrator' doctor"
 Write-Host "  & '$orchestrator' list"
