@@ -15,7 +15,7 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Project/workspace grouping and sequential project task queues.
 - Embedded local dashboard with task/project management.
 - `orch` CLI installed on the current user's PATH.
-- Native Windows EXE installer/uninstaller.
+- Inno Setup based Windows installer/uninstaller.
 - Hidden Windows background daemon with per-user autostart.
 
 ## Install on Windows
@@ -26,19 +26,21 @@ Prerequisites:
 - Codex Desktop
 - Codex CLI installed and logged in
 
-Download the latest Windows x64 ZIP from GitHub Releases, extract it, then double-click:
+Download the latest installer directly from GitHub Releases:
 
 ```text
-CodexQuotaGuardSetup.exe
+CodexQuotaGuardSetup-vX.Y.Z.exe
 ```
 
-No PowerShell execution-policy change and no `.ps1` installer are required.
+Double-click it and complete the normal Windows setup wizard. No PowerShell script or execution-policy change is required.
 
-Setup installs stable files under:
+Setup installs under:
 
 ```text
 %LOCALAPPDATA%\CodexQuotaGuard\
-├─ Uninstall.exe
+├─ unins000.exe
+├─ config.example.json
+├─ docs\
 └─ bin\
    ├─ orchestrator.exe
    ├─ orchestrator-daemon.exe
@@ -46,15 +48,13 @@ Setup installs stable files under:
    └─ desktop-companion.exe
 ```
 
-It also:
+The installer itself only handles normal application installation concerns: files, User PATH, Windows autostart, shortcuts, and uninstall registration. Codex-specific bootstrap is delegated to:
 
-- adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current User PATH;
-- registers `desktop-quota-guard` through Codex CLI;
-- installs the managed Quota Guard block in `~/.codex/AGENTS.md`;
-- initializes the relay if needed;
-- registers per-user Windows autostart;
-- registers **Codex Desktop Quota Guard** in Windows Installed Apps;
-- starts the daemon in the background with no console window.
+```powershell
+orch setup
+```
+
+During installation Inno Setup runs that command to register the MCP companion, manage the Quota Guard block in `~/.codex/AGENTS.md`, and initialize the relay when needed.
 
 After installation, fully quit and reopen Codex Desktop once, then open a new terminal and run:
 
@@ -65,9 +65,9 @@ orch ui
 
 ## Upgrade / repair
 
-Download and extract the newer release, then run its `CodexQuotaGuardSetup.exe` again.
+Download the newer `CodexQuotaGuardSetup-vX.Y.Z.exe` and run it again.
 
-The native setup behaves as install-or-upgrade and preserves:
+Inno Setup uses the Windows Restart Manager for files that are currently in use rather than force-killing processes itself. Runtime state remains outside the install directory and is preserved:
 
 ```text
 ~\.codex-desktop-quota-guard\
@@ -75,11 +75,15 @@ The native setup behaves as install-or-upgrade and preserves:
 
 including SQLite task history and relay state.
 
-Before modifying an existing install, setup checks whether Codex Desktop is still using `desktop-companion.exe`. If it is, setup asks you to fully quit Codex Desktop and retry instead of leaving the installation half-upgraded.
+If Codex integration ever needs to be repaired manually:
+
+```powershell
+orch setup
+```
 
 ## Uninstall
 
-Use either:
+Use:
 
 ```text
 Settings
@@ -89,29 +93,27 @@ Settings
 → Uninstall
 ```
 
-or double-click:
+or run the Inno Setup uninstaller inside:
 
 ```text
-%LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
+%LOCALAPPDATA%\CodexQuotaGuard\unins000.exe
 ```
 
-Interactive uninstall asks whether to also delete runtime state.
-
-Command-line uninstall:
+Before removing application files, the uninstaller runs:
 
 ```powershell
-& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent
+orch teardown
 ```
 
-Remove local state too:
+which removes the `desktop-quota-guard` MCP registration and the managed Quota Guard block from `AGENTS.md`.
 
-```powershell
-& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent --purge-data
-```
+Runtime state under `~\.codex-desktop-quota-guard\` is intentionally preserved so reinstall/upgrade does not destroy task history.
 
 ## Everyday commands
 
 ```powershell
+orch setup
+orch teardown
 orch status
 orch ui
 orch list
@@ -191,9 +193,10 @@ Manual commands support `--config`, and background configuration can also use su
 
 ```text
 cmd/
-  orchestrator/       daemon + CLI
+  orchestrator/       daemon + CLI + Codex bootstrap commands
   desktop-companion/  MCP server launched by Codex Desktop
-  setup/              native Windows installer/uninstaller
+installer/
+  CodexQuotaGuard.iss Inno Setup definition
 internal/
   codexquota/         short-lived Codex app-server quota client
   daemon/             monitor + API + queue scheduler
