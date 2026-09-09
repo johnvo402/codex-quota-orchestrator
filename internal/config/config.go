@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -19,6 +20,9 @@ type Config struct {
 	HardThresholdPercent   float64 `json:"hardThresholdPercent"`
 	ResumeThresholdPercent float64 `json:"resumeThresholdPercent"`
 	RequestTimeoutSeconds  int     `json:"requestTimeoutSeconds"`
+	AutoDispatch           bool    `json:"autoDispatch"`
+
+	sourcePath string
 }
 
 func Default() Config {
@@ -33,33 +37,106 @@ func Default() Config {
 		HardThresholdPercent:   5,
 		ResumeThresholdPercent: 20,
 		RequestTimeoutSeconds:  20,
+		AutoDispatch:           true,
 	}
+}
+
+// DefaultPath is the shared config file used by the daemon, companion, and CLI
+// when no explicit --config/CDQG_CONFIG path is supplied.
+func DefaultPath() string {
+	cfg := Default()
+	if v := strings.TrimSpace(os.Getenv("CDQG_DATA_DIR")); v != "" {
+		cfg.DataDir = v
+	}
+	return filepath.Join(cfg.DataDir, "config.json")
+}
+
+func ResolvePath(path string) string {
+	if v := strings.TrimSpace(path); v != "" {
+		return filepath.Clean(v)
+	}
+	if v := strings.TrimSpace(os.Getenv("CDQG_CONFIG")); v != "" {
+		return filepath.Clean(v)
+	}
+	return DefaultPath()
 }
 
 func Load(path string) (Config, error) {
 	cfg := Default()
-	if path == "" {
-		path = os.Getenv("CDQG_CONFIG")
-	}
-	if path != "" {
-		b, err := os.ReadFile(path)
-		if err != nil {
-			return Config{}, fmt.Errorf("read config: %w", err)
-		}
+	resolved := ResolvePath(path)
+	explicit := strings.TrimSpace(path) != "" || strings.TrimSpace(os.Getenv("CDQG_CONFIG")) != ""
+
+	b, err := os.ReadFile(resolved)
+	switch {
+	case err == nil:
 		if err := json.Unmarshal(b, &cfg); err != nil {
-			return Config{}, fmt.Errorf("parse config: %w", err)
+			return Config{}, fmt.Errorf("parse config %s: %w", resolved, err)
 		}
+	case errors.Is(err, os.ErrNotExist) && !explicit:
+		// The shared default file is optional. Existing installations continue
+		// to use defaults until Settings is saved for the first time.
+	case err != nil:
+		return Config{}, fmt.Errorf("read config %s: %w", resolved, err)
 	}
+
 	if v := os.Getenv("CDQG_CODEX_COMMAND"); v != "" {
 		cfg.CodexCommand = v
 	}
 	if v := os.Getenv("CDQG_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
+	cfg.sourcePath = resolved
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func Save(path string, cfg Config) error {
+	resolved := strings.TrimSpace(path)
+	if resolved == "" {
+		resolved = cfg.ConfigPath()
+	}
+	resolved = ResolvePath(resolved)
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(resolved), 0o700); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	b = append(b, '\n')
+
+	tmp, err := os.CreateTemp(filepath.Dir(resolved), ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("secure temporary config: %w", err)
+	}
+	if _, err := tmp.Write(b); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary config: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temporary config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary config: %w", err)
+	}
+	if err := os.Rename(tmpPath, resolved); err != nil {
+		return fmt.Errorf("replace config: %w", err)
+	}
+	return nil
 }
 
 func (c Config) Validate() error {
@@ -72,10 +149,20 @@ func (c Config) Validate() error {
 	if c.CompanionPollSeconds < 1 {
 		return errors.New("companionPollSeconds must be >= 1")
 	}
+	if c.RequestTimeoutSeconds < 1 {
+		return errors.New("requestTimeoutSeconds must be >= 1")
+	}
 	if c.HardThresholdPercent < 0 || c.SoftThresholdPercent <= c.HardThresholdPercent || c.ResumeThresholdPercent <= c.SoftThresholdPercent || c.ResumeThresholdPercent > 100 {
 		return errors.New("thresholds must satisfy 0 <= hard < soft < resume <= 100")
 	}
 	return nil
+}
+
+func (c Config) ConfigPath() string {
+	if strings.TrimSpace(c.sourcePath) != "" {
+		return c.sourcePath
+	}
+	return ResolvePath("")
 }
 
 func (c Config) DBPath() string    { return filepath.Join(c.DataDir, "state.db") }
