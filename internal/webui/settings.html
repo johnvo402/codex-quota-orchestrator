@@ -39,7 +39,7 @@
   <div class="card">
     <h3>Server</h3>
     <div class="field"><label>Listen address</label><input id="listen" class="input" autocomplete="off"></div>
-    <div class="hint">Changing the listen address changes the dashboard/API address after restart. Keep it on loopback unless you intentionally secure remote access.</div>
+    <div class="hint">Only loopback addresses are accepted: 127.0.0.1, localhost, or ::1. This keeps the unauthenticated local control API off the LAN.</div>
   </div>
   <div class="actions"><button class="btn" onclick="load()">Reset</button><button id="save" class="btn primary" onclick="save()">Save settings</button></div>
 </div>
@@ -50,7 +50,7 @@ function notice(message,type='ok'){const n=$('#notice');n.textContent=message;n.
 function num(id){return Number($(id).value)}
 function fill(x){const c=x.config;$('#configPath').textContent=x.configPath;$('#hard').value=c.hardThresholdPercent;$('#soft').value=c.softThresholdPercent;$('#resume').value=c.resumeThresholdPercent;$('#poll').value=c.pollIntervalSeconds;$('#companionPoll').value=c.companionPollSeconds;$('#timeout').value=c.requestTimeoutSeconds;$('#listen').value=c.listenAddr;$('#autoDispatch').checked=!!c.autoDispatch}
 async function load(){try{fill(await api('/v1/settings'));$('#notice').className='notice'}catch(e){notice(e.message,'err')}}
-async function save(){const b=$('#save');b.disabled=true;try{const out=await api('/v1/settings',{method:'PUT',body:JSON.stringify({listenAddr:$('#listen').value.trim(),hardThresholdPercent:num('#hard'),softThresholdPercent:num('#soft'),resumeThresholdPercent:num('#resume'),pollIntervalSeconds:num('#poll'),companionPollSeconds:num('#companionPoll'),requestTimeoutSeconds:num('#timeout'),autoDispatch:$('#autoDispatch').checked})});fill(out);notice(out.restartRequired?'Settings saved. Restart the quota daemon and reopen Codex Desktop to apply all changes.':'Settings saved.','warn')}catch(e){notice(e.message,'err')}finally{b.disabled=false}}
+async function save(){const b=$('#save');b.disabled=true;try{const out=await api('/v1/settings',{method:'PUT',body:JSON.stringify({listenAddr:$('#listen').value.trim(),hardThresholdPercent:num('#hard'),softThresholdPercent:num('#soft'),resumeThresholdPercent:num('#resume'),pollIntervalSeconds:num('#poll'),companionPollSeconds:num('#companionPoll'),requestTimeoutSeconds:num('#timeout'),autoDispatch:$('#autoDispatch').checked})});fill(out);notice(out.restartRequired?'Settings saved. Restart the quota daemon and reopen Codex Desktop to apply all changes.':'Settings saved.',out.restartRequired?'warn':'ok')}catch(e){notice(e.message,'err')}finally{b.disabled=false}}
 load();
 </script>
 </body>
