@@ -33,7 +33,7 @@ func runCodexQuiet(args ...string) (string, error) {
 		}
 		cmd = exec.Command(comspec)
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:     true,
+			HideWindow:    true,
 			CreationFlags: bootstrapCreateNoWindow,
 			CmdLine:       `/d /s /c "` + strings.Join(parts, " ") + `"`,
 		}
