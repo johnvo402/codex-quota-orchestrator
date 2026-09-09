@@ -34,7 +34,7 @@ if ($needBuild) {
     try {
         go test ./...
         if ($LASTEXITCODE -ne 0) { throw 'go test failed' }
-        if ($IsWindows) { go vet -unsafeptr=false ./... } else { go vet ./... }
+        go vet -unsafeptr=false ./...
         if ($LASTEXITCODE -ne 0) { throw 'go vet failed' }
         go build -o $orchestratorSource ./cmd/orchestrator
         if ($LASTEXITCODE -ne 0) { throw 'orchestrator build failed' }
