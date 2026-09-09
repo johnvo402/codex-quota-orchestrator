@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -136,14 +137,20 @@ func followLogs(dataDir string, components []string, minLevel slog.Level, jsonOu
 				if info.Size() == offset {
 					continue
 				}
-				b, err := os.ReadFile(path)
+
+				file, err := os.Open(path)
 				if err != nil {
 					return err
 				}
-				if offset > int64(len(b)) {
-					offset = 0
+				if _, err := file.Seek(offset, io.SeekStart); err != nil {
+					_ = file.Close()
+					return err
 				}
-				chunk := b[offset:]
+				chunk, err := io.ReadAll(file)
+				_ = file.Close()
+				if err != nil {
+					return err
+				}
 				lastNewline := bytes.LastIndexByte(chunk, '\n')
 				if lastNewline < 0 {
 					continue
