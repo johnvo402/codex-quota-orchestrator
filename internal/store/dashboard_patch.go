@@ -42,3 +42,21 @@ ON CONFLICT(task_id) DO UPDATE SET
 	}
 	return s.GetDashboardTask(ctx, id)
 }
+
+// BackfillProjects creates project records for existing tasks that already have
+// a workspace path but predate the dashboard schema.
+func (s *Store) BackfillProjects(ctx context.Context) error {
+	tasks, err := s.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+	for _, task := range tasks {
+		if task.Workspace == "" {
+			continue
+		}
+		if _, err := s.EnsureProjectForWorkspace(ctx, task.ID, task.Workspace); err != nil {
+			return err
+		}
+	}
+	return nil
+}
