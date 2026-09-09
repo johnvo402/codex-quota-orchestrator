@@ -18,30 +18,34 @@ Go is only required for source development.
 
 ## Install from GitHub Release
 
-1. Download the latest `codex-quota-orchestrator-<version>-windows-x64.zip` from GitHub Releases.
-2. Extract the ZIP.
-3. Double-click:
+Download the latest installer directly from GitHub Releases:
 
 ```text
-CodexQuotaGuardSetup.exe
+CodexQuotaGuardSetup-vX.Y.Z.exe
 ```
 
-4. Confirm installation.
-5. Fully quit and reopen Codex Desktop once so it reloads the MCP companion.
-6. Open a new terminal and verify:
+Double-click it and complete the normal Inno Setup wizard.
+
+No ZIP extraction, PowerShell installer, or execution-policy change is required.
+
+After installation:
+
+1. Fully quit and reopen Codex Desktop once so it reloads the MCP companion.
+2. Open a new terminal.
+3. Verify:
 
 ```powershell
 orch status
 orch ui
 ```
 
-No PowerShell installer and no execution-policy change are required.
-
 ## What setup installs
 
 ```text
 %LOCALAPPDATA%\CodexQuotaGuard\
-├─ Uninstall.exe
+├─ unins000.exe
+├─ config.example.json
+├─ docs\
 └─ bin\
    ├─ orchestrator.exe
    ├─ orchestrator-daemon.exe
@@ -49,15 +53,25 @@ No PowerShell installer and no execution-policy change are required.
    └─ desktop-companion.exe
 ```
 
-Setup also:
+Inno Setup handles normal Windows installation concerns:
 
+- copies application files;
 - adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current User PATH;
-- registers `desktop-quota-guard` through Codex CLI;
-- adds/updates the managed Quota Guard block in `~/.codex/AGENTS.md`;
-- initializes the relay when needed;
 - registers per-user background startup through the Windows Run key;
-- registers **Codex Desktop Quota Guard** in Windows Installed Apps;
-- starts `orchestrator-daemon.exe` immediately in the background.
+- creates the Windows Installed Apps entry and standard uninstaller;
+- uses the Windows Restart Manager when installed files are in use.
+
+Codex-specific integration is deliberately delegated to the application command:
+
+```powershell
+orch setup
+```
+
+During setup this command is run automatically. It:
+
+- registers the `desktop-quota-guard` MCP companion through Codex CLI;
+- adds/updates the managed Quota Guard block in `~/.codex/AGENTS.md`;
+- initializes the relay when needed.
 
 The daemon is built with the Windows GUI subsystem and background child processes use `CREATE_NO_WINDOW`, so normal operation should not keep or periodically flash terminal windows.
 
@@ -69,32 +83,31 @@ State is kept separately from installed binaries:
 ~\.codex-desktop-quota-guard\
 ```
 
-This includes SQLite task history and relay state. Normal reinstall/upgrade preserves it.
+This includes SQLite task history and relay state. Normal reinstall/upgrade and uninstall preserve it.
 
 ## Upgrade / repair
 
-Download/extract the newer release and double-click its:
+Download the newer:
 
 ```text
-CodexQuotaGuardSetup.exe
+CodexQuotaGuardSetup-vX.Y.Z.exe
 ```
 
-Before modifying the existing installation, setup checks whether Codex Desktop is still using `desktop-companion.exe`.
+and run it again.
 
-If it is, setup asks you to:
+Inno Setup identifies the existing installation using the same application ID and upgrades the files in place. If a file is in use, Windows Restart Manager handles the normal close/retry flow rather than the installer force-killing processes itself.
 
-```text
-Fully quit Codex Desktop
-→ click Retry
+After an upgrade, Codex bootstrap is refreshed automatically. To repair only the Codex integration later, run:
+
+```powershell
+orch setup
 ```
-
-This preflight happens before replacing installed files, preventing the previous partial-upgrade/file-lock failure mode.
-
-Setup then refreshes binaries, MCP registration, PATH, startup registration and Windows uninstall metadata while preserving runtime state.
 
 ## Everyday commands
 
 ```powershell
+orch setup
+orch teardown
 orch status
 orch ui
 orch list
@@ -130,7 +143,7 @@ and starts the hidden daemon if it is not already healthy.
 
 ## Uninstall
 
-### Windows Settings
+Use Windows Settings:
 
 ```text
 Settings
@@ -140,29 +153,27 @@ Settings
 → Uninstall
 ```
 
-### Direct EXE
-
-Double-click:
+or run the standard Inno Setup uninstaller:
 
 ```text
-%LOCALAPPDATA%\CodexQuotaGuard\Uninstall.exe
+%LOCALAPPDATA%\CodexQuotaGuard\unins000.exe
 ```
 
-The uninstaller removes MCP registration, User PATH, background startup, legacy Scheduled Task registrations, the managed `AGENTS.md` block, installed binaries and the Installed Apps entry.
-
-By default runtime data is preserved. Interactive uninstall asks whether to purge it too.
-
-Silent uninstall:
+Before installed files are removed, the uninstaller runs:
 
 ```powershell
-& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent
+orch teardown
 ```
 
-Silent uninstall plus data purge:
+which removes the MCP registration and the managed Quota Guard block in `AGENTS.md`.
 
-```powershell
-& "$env:LOCALAPPDATA\CodexQuotaGuard\Uninstall.exe" uninstall --silent --purge-data
+The runtime data directory is intentionally left intact:
+
+```text
+~\.codex-desktop-quota-guard\
 ```
+
+If a full data purge is desired, delete that directory manually after uninstalling.
 
 ## Configuration
 
@@ -186,9 +197,15 @@ orch daemon --config C:\path\to\config.json
 
 Background configuration currently uses defaults plus supported `CDQG_*` environment variables. Installer-level config selection is planned separately.
 
+## Antivirus / reputation note
+
+The release installer is now built with Inno Setup rather than a custom self-copying Go installer. This removes custom installer behaviors such as self-copying to `Uninstall.exe`, manual uninstall registry management, and force-killing application processes.
+
+The project still intends to add trusted code signing for release binaries. Until signed reputation is established, Windows Defender or SmartScreen may still occasionally warn on a new release. Do not solve that by disabling Defender or excluding broad folders; verify the published SHA256 and report false positives when needed.
+
 ## Source/development scripts
 
-Legacy PowerShell scripts may remain in the repository for development and migration testing, but release users should use `CodexQuotaGuardSetup.exe` and Windows Installed Apps / `Uninstall.exe`.
+Legacy PowerShell scripts may remain in the repository for development and migration testing, but release users should use the Inno Setup installer and Windows Installed Apps.
 
 ## Important limitation
 
