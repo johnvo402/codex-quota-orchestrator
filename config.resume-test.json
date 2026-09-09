@@ -1,8 +1,0 @@
-{
-  "pollIntervalSeconds": 10,
-  "companionPollSeconds": 2,
-
-  "softThresholdPercent": 10,
-  "hardThresholdPercent": 5,
-  "resumeThresholdPercent": 20
-}
