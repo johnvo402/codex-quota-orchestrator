@@ -79,19 +79,38 @@ begin
   Result := Lowercase(Result);
 end;
 
+function TakePathPart(var Remaining: string): string;
+var
+  Sep: Integer;
+begin
+  Sep := Pos(';', Remaining);
+  if Sep = 0 then
+  begin
+    Result := Remaining;
+    Remaining := '';
+  end
+  else
+  begin
+    Result := Copy(Remaining, 1, Sep - 1);
+    Delete(Remaining, 1, Sep);
+  end;
+end;
+
 function PathContains(CurrentPath, Entry: string): Boolean;
 var
-  Parts: TArrayOfString;
-  I: Integer;
+  Remaining, Part: string;
 begin
   Result := False;
-  Parts := SplitString(CurrentPath, ';');
-  for I := 0 to GetArrayLength(Parts) - 1 do
-    if NormalizePathEntry(Parts[I]) = NormalizePathEntry(Entry) then
+  Remaining := CurrentPath;
+  while Remaining <> '' do
+  begin
+    Part := TakePathPart(Remaining);
+    if NormalizePathEntry(Part) = NormalizePathEntry(Entry) then
     begin
       Result := True;
       Exit;
     end;
+  end;
 end;
 
 procedure AddToUserPath(Entry: string);
@@ -109,22 +128,21 @@ end;
 
 procedure RemoveFromUserPath(Entry: string);
 var
-  CurrentPath, NewPath: string;
-  Parts: TArrayOfString;
-  I: Integer;
+  CurrentPath, NewPath, Remaining, Part: string;
 begin
   if not RegQueryStringValue(HKCU, EnvironmentKey, PathValueName, CurrentPath) then
     Exit;
-  Parts := SplitString(CurrentPath, ';');
+  Remaining := CurrentPath;
   NewPath := '';
-  for I := 0 to GetArrayLength(Parts) - 1 do
+  while Remaining <> '' do
   begin
-    if (Trim(Parts[I]) <> '') and
-       (NormalizePathEntry(Parts[I]) <> NormalizePathEntry(Entry)) then
+    Part := TakePathPart(Remaining);
+    if (Trim(Part) <> '') and
+       (NormalizePathEntry(Part) <> NormalizePathEntry(Entry)) then
     begin
       if NewPath <> '' then
         NewPath := NewPath + ';';
-      NewPath := NewPath + Trim(Parts[I]);
+      NewPath := NewPath + Trim(Part);
     end;
   end;
   RegWriteExpandStringValue(HKCU, EnvironmentKey, PathValueName, NewPath);
