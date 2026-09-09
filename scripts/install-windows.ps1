@@ -1,35 +1,65 @@
 param(
     [switch]$SkipRelayInit,
-    [switch]$SkipAgentInstructions
+    [switch]$SkipAgentInstructions,
+    [switch]$SkipAutoStart,
+    [switch]$ForceBuild
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$bin = Join-Path $root 'bin'
-New-Item -ItemType Directory -Force $bin | Out-Null
+$sourceBin = Join-Path $root 'bin'
+$installRoot = Join-Path $env:LOCALAPPDATA 'CodexQuotaGuard'
+$installBin = Join-Path $installRoot 'bin'
+$taskName = 'Codex Desktop Quota Guard'
+
+function Assert-Command([string]$Name) {
+    if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
+        throw "Required command '$Name' was not found in PATH."
+    }
+}
 
 Write-Host '==> Checking prerequisites'
-go version
-codex --version
+Assert-Command 'codex'
+& codex --version
 
-Write-Host '==> Restoring Go modules'
-Push-Location $root
-try {
-    go mod tidy
-    go test ./...
-    go vet ./...
-    go build -o (Join-Path $bin 'orchestrator.exe') ./cmd/orchestrator
-    go build -o (Join-Path $bin 'desktop-companion.exe') ./cmd/desktop-companion
-} finally { Pop-Location }
+$orchestratorSource = Join-Path $sourceBin 'orchestrator.exe'
+$companionSource = Join-Path $sourceBin 'desktop-companion.exe'
+$needBuild = $ForceBuild -or -not (Test-Path $orchestratorSource) -or -not (Test-Path $companionSource)
 
-$companion = (Resolve-Path (Join-Path $bin 'desktop-companion.exe')).Path
-$orchestrator = (Resolve-Path (Join-Path $bin 'orchestrator.exe')).Path
+if ($needBuild) {
+    Assert-Command 'go'
+    Write-Host '==> Building from source'
+    New-Item -ItemType Directory -Force $sourceBin | Out-Null
+    Push-Location $root
+    try {
+        go test ./...
+        if ($LASTEXITCODE -ne 0) { throw 'go test failed' }
+        if ($IsWindows) { go vet -unsafeptr=false ./... } else { go vet ./... }
+        if ($LASTEXITCODE -ne 0) { throw 'go vet failed' }
+        go build -o $orchestratorSource ./cmd/orchestrator
+        if ($LASTEXITCODE -ne 0) { throw 'orchestrator build failed' }
+        go build -o $companionSource ./cmd/desktop-companion
+        if ($LASTEXITCODE -ne 0) { throw 'desktop-companion build failed' }
+    } finally {
+        Pop-Location
+    }
+}
+
+Write-Host "==> Installing binaries to $installBin"
+New-Item -ItemType Directory -Force $installBin | Out-Null
+Copy-Item $orchestratorSource (Join-Path $installBin 'orchestrator.exe') -Force
+Copy-Item $companionSource (Join-Path $installBin 'desktop-companion.exe') -Force
+
+$orchestrator = (Resolve-Path (Join-Path $installBin 'orchestrator.exe')).Path
+$companion = (Resolve-Path (Join-Path $installBin 'desktop-companion.exe')).Path
 
 Write-Host '==> Registering MCP companion globally in Codex'
 try { & codex mcp remove desktop-quota-guard 2>$null | Out-Null } catch {}
 & codex mcp add desktop-quota-guard -- $companion
+if ($LASTEXITCODE -ne 0) { throw 'codex mcp add failed' }
 
 if (-not $SkipAgentInstructions) {
+    Write-Host '==> Installing global Codex instructions'
     $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
     New-Item -ItemType Directory -Force $codexHome | Out-Null
     $agents = Join-Path $codexHome 'AGENTS.md'
@@ -48,20 +78,47 @@ $end
 "@
     $existing = if (Test-Path $agents) { Get-Content $agents -Raw } else { '' }
     $pattern = [regex]::Escape($start) + '(?s).*?' + [regex]::Escape($end)
-    if ($existing -match $pattern) { $new = [regex]::Replace($existing, $pattern, $block) }
-    else { $new = ($existing.TrimEnd() + "`r`n`r`n" + $block + "`r`n").TrimStart() }
+    if ($existing -match $pattern) {
+        $new = [regex]::Replace($existing, $pattern, $block)
+    } else {
+        $new = ($existing.TrimEnd() + "`r`n`r`n" + $block + "`r`n").TrimStart()
+    }
     Set-Content -Path $agents -Value $new -Encoding UTF8
     Write-Host "Updated $agents"
 }
 
 if (-not $SkipRelayInit) {
-    Write-Host '==> Creating one persistent relay executor thread (one tiny Codex turn)'
-    & $orchestrator relay-init
+    Write-Host '==> Ensuring relay executor is initialized'
+    $relayPath = Join-Path $HOME '.codex-desktop-quota-guard\relay.json'
+    if (Test-Path $relayPath) {
+        Write-Host "Relay already exists: $relayPath"
+    } else {
+        & $orchestrator relay-init
+        if ($LASTEXITCODE -ne 0) { throw 'relay-init failed' }
+    }
+}
+
+if (-not $SkipAutoStart) {
+    Write-Host '==> Registering daemon autostart task'
+    $action = New-ScheduledTaskAction -Execute $orchestrator -Argument 'daemon'
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Runs the local Codex Desktop Quota Guard daemon.' -Force | Out-Null
+
+    Write-Host '==> Starting daemon'
+    Start-ScheduledTask -TaskName $taskName
+    Start-Sleep -Milliseconds 800
 }
 
 Write-Host ''
-Write-Host 'Installed.'
-Write-Host "Start daemon in a terminal:"
-Write-Host "  & '$orchestrator' daemon"
-Write-Host 'Then fully restart Codex Desktop so it reloads the MCP server.'
-Write-Host "Run: & '$orchestrator' doctor"
+Write-Host 'Installation complete.'
+Write-Host "Installed binaries: $installBin"
+Write-Host "Autostart task:      $taskName"
+Write-Host ''
+Write-Host 'Fully quit and reopen Codex Desktop so it reloads the MCP server.'
+Write-Host ''
+Write-Host 'Useful commands:'
+Write-Host "  & '$orchestrator' status"
+Write-Host "  & '$orchestrator' doctor"
+Write-Host "  & '$orchestrator' list"
+Write-Host "  & '$orchestrator' version"
