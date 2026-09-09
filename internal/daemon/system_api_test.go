@@ -35,7 +35,7 @@ func TestSystemRestartRequiresControlHeader(t *testing.T) {
 	}
 }
 
-func TestSystemRestartLaunchesReplacement(t *testing.T) {
+func TestSystemRestartLaunchesReplacementWithoutMissingConfigArg(t *testing.T) {
 	var gotConfig, gotWaitURL string
 	old := launchRestartChildFn
 	launchRestartChildFn = func(configPath, waitURL string) error {
@@ -59,8 +59,8 @@ func TestSystemRestartLaunchesReplacement(t *testing.T) {
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
 	}
-	if gotConfig != cfg.ConfigPath() {
-		t.Fatalf("unexpected config path: %q", gotConfig)
+	if gotConfig != "" {
+		t.Fatalf("missing default config must not be passed as explicit --config: %q", gotConfig)
 	}
 	if gotWaitURL != cfg.BaseURL()+"/healthz" {
 		t.Fatalf("unexpected wait URL: %q", gotWaitURL)
