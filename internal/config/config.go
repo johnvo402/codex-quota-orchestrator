@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -143,6 +145,9 @@ func (c Config) Validate() error {
 	if c.DataDir == "" || c.ListenAddr == "" || c.CodexCommand == "" {
 		return errors.New("dataDir, listenAddr and codexCommand are required")
 	}
+	if err := validateListenAddr(c.ListenAddr); err != nil {
+		return err
+	}
 	if c.PollIntervalSeconds < 10 {
 		return errors.New("pollIntervalSeconds must be >= 10")
 	}
@@ -154,6 +159,25 @@ func (c Config) Validate() error {
 	}
 	if c.HardThresholdPercent < 0 || c.SoftThresholdPercent <= c.HardThresholdPercent || c.ResumeThresholdPercent <= c.SoftThresholdPercent || c.ResumeThresholdPercent > 100 {
 		return errors.New("thresholds must satisfy 0 <= hard < soft < resume <= 100")
+	}
+	return nil
+}
+
+func validateListenAddr(addr string) error {
+	host, portText, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return fmt.Errorf("listenAddr must be host:port: %w", err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("listenAddr port must be between 1 and 65535")
+	}
+	if strings.EqualFold(host, "localhost") {
+		return nil
+	}
+	ip := net.ParseIP(host)
+	if ip == nil || !ip.IsLoopback() {
+		return errors.New("listenAddr must use a loopback host (127.0.0.1, localhost, or ::1)")
 	}
 	return nil
 }
