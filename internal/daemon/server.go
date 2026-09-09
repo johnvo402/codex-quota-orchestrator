@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -43,6 +44,7 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 }
 
 func (s *Server) ListenAndServe() error              { return s.http.ListenAndServe() }
+func (s *Server) Serve(listener net.Listener) error  { return s.http.Serve(listener) }
 func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
