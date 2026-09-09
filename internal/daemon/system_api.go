@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"time"
 )
 
 const restartControlHeader = "X-CDQG-Control"
@@ -17,6 +19,11 @@ func (s *Server) systemRestart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := launchRestartChild(s.service.cfg.ConfigPath(), s.service.cfg.BaseURL()+"/healthz"); err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+
 	jsonOut(w, http.StatusAccepted, map[string]any{
 		"ok":         true,
 		"restarting": true,
@@ -25,9 +32,15 @@ func (s *Server) systemRestart(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 
-	select {
-	case s.restart <- struct{}{}:
-	default:
-		// A restart is already queued.
-	}
+	go func() {
+		// Give the accepted response a moment to leave the socket before
+		// gracefully closing listeners. The replacement child is already
+		// waiting for this server's health endpoint to disappear.
+		time.Sleep(75 * time.Millisecond)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.Shutdown(ctx); err != nil {
+			s.log.Warn("daemon restart shutdown failed", "error", err)
+		}
+	}()
 }
