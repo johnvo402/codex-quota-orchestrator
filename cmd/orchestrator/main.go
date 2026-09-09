@@ -24,6 +24,7 @@ import (
 	"codex-desktop-quota-guard/internal/daemon"
 	"codex-desktop-quota-guard/internal/desktop"
 	"codex-desktop-quota-guard/internal/domain"
+	"codex-desktop-quota-guard/internal/observability"
 	"codex-desktop-quota-guard/internal/quota"
 	"codex-desktop-quota-guard/internal/store"
 )
@@ -47,6 +48,9 @@ func run() error {
 	if cmd == "version" {
 		fmt.Println(version)
 		return nil
+	}
+	if cmd == "logs" {
+		return logsCommand(os.Args[2:])
 	}
 
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
@@ -188,10 +192,15 @@ func runDaemon(cfg config.Config) error {
 	}
 	defer listener.Close()
 
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return err
 	}
+	log, logCloser, err := observability.NewLogger(cfg.DataDir, "daemon", os.Stderr)
+	if err != nil {
+		return err
+	}
+	defer logCloser.Close()
+
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
 		return err
@@ -215,13 +224,16 @@ func runDaemon(cfg config.Config) error {
 	log.Info("Desktop quota daemon started", "listen", cfg.ListenAddr, "db", cfg.DBPath(), "dashboard", cfg.BaseURL())
 	select {
 	case <-ctx.Done():
+		log.Info("Desktop quota daemon stopping", "reason", "signal")
 		sd, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
 		return srv.Shutdown(sd)
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
+			log.Info("Desktop quota daemon stopped")
 			return nil
 		}
+		log.Error("Desktop quota daemon server failed", "error", err)
 		return err
 	}
 }
@@ -425,11 +437,12 @@ func trim(s string, n int) string {
 }
 
 func usage() {
-	fmt.Println("orchestrator <setup|teardown|config|restart|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("orchestrator <setup|teardown|config|restart|logs|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
 	fmt.Println("  setup                                   Configure Codex MCP, AGENTS.md, and relay")
 	fmt.Println("  teardown                                Remove Codex MCP and managed AGENTS.md block")
 	fmt.Println("  config [show|path|validate]              Inspect shared configuration")
 	fmt.Println("  restart                                 Gracefully restart the quota daemon")
+	fmt.Println("  logs [--follow] [--tail N] [--level L]  View daemon and companion logs")
 	fmt.Println("  ui                                      Open local dashboard")
 	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
 }
