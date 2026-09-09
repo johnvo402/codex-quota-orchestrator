@@ -27,6 +27,7 @@ jobs:
           cache: true
 
       - name: Format check
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           files="$(gofmt -l .)"
