@@ -64,6 +64,10 @@ func run() error {
 	}
 
 	switch cmd {
+	case "setup":
+		return setupCodexIntegration(cfg)
+	case "teardown":
+		return teardownCodexIntegration()
 	case "doctor":
 		return doctor(cfg, *jsonOut)
 	case "relay-init":
@@ -415,7 +419,9 @@ func trim(s string, n int) string {
 }
 
 func usage() {
-	fmt.Println("orchestrator <doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("orchestrator <setup|teardown|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("  setup                                   Configure Codex MCP, AGENTS.md, and relay")
+	fmt.Println("  teardown                                Remove Codex MCP and managed AGENTS.md block")
 	fmt.Println("  ui                                      Open local dashboard")
 	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
 }
