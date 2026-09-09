@@ -14,6 +14,11 @@ type projectTaskReq struct {
 	Position  *int64 `json:"position"`
 }
 
+type projectTaskReorderReq struct {
+	ProjectID string   `json:"projectId"`
+	TaskIDs   []string `json:"taskIds"`
+}
+
 func (s *Server) projectTasks(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
@@ -53,6 +58,11 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if path == "reorder" {
+		s.reorderProjectTasks(w, r)
+		return
+	}
+
 	parts := strings.Split(path, "/")
 	id := parts[0]
 	if len(parts) == 2 {
@@ -120,6 +130,33 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) reorderProjectTasks(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	v, err := decode[projectTaskReorderReq](r)
+	if err != nil {
+		httpErr(w, http.StatusBadRequest, err)
+		return
+	}
+	v.ProjectID = strings.TrimSpace(v.ProjectID)
+	if v.ProjectID == "" {
+		httpErr(w, http.StatusBadRequest, errors.New("projectId required"))
+		return
+	}
+	if err := s.store.ReorderQueuedProjectTasks(r.Context(), v.ProjectID, v.TaskIDs); err != nil {
+		httpErr(w, queueStatus(err), err)
+		return
+	}
+	items, err := s.store.ListProjectTasks(r.Context(), v.ProjectID)
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	jsonOut(w, http.StatusOK, items)
 }
 
 func queueStatus(err error) int {
