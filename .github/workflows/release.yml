@@ -24,7 +24,7 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Build Windows x64
+      - name: Build Windows x64 binaries
         shell: pwsh
         run: |
           $version = '${{ github.ref_name }}'
@@ -39,82 +39,82 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o bin/desktop-companion.exe ./cmd/desktop-companion
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=$version" -o CodexQuotaGuardSetup.exe ./cmd/setup
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --yes --no-progress
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $appVersion = $tag.TrimStart('v')
+          New-Item -ItemType Directory -Force dist | Out-Null
+
+          $iscc = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            throw "Inno Setup compiler not found at $iscc"
+          }
+
+          & $iscc "/DAppVersion=$appVersion" installer\CodexQuotaGuard.iss
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Assemble package
+          $built = 'dist\CodexQuotaGuardSetup.exe'
+          $releaseName = "CodexQuotaGuardSetup-$tag.exe"
+          if (-not (Test-Path $built)) {
+            throw "Installer was not produced: $built"
+          }
+          Move-Item $built $releaseName -Force
+
+      - name: Smoke-test installer payload
         shell: pwsh
         run: |
-          $version = '${{ github.ref_name }}'
-          $package = "codex-quota-orchestrator-$version-windows-x64"
-          New-Item -ItemType Directory -Force "$package/bin" | Out-Null
-          New-Item -ItemType Directory -Force "$package/docs" | Out-Null
-
-          Copy-Item CodexQuotaGuardSetup.exe "$package/"
-          Copy-Item bin/orchestrator.exe "$package/bin/"
-          Copy-Item bin/orchestrator-daemon.exe "$package/bin/"
-          Copy-Item bin/desktop-companion.exe "$package/bin/"
-          Copy-Item config.example.json "$package/"
-          Copy-Item README.md "$package/"
-          Copy-Item docs/WINDOWS_SETUP.md "$package/docs/"
-          Copy-Item docs/ARCHITECTURE.md "$package/docs/"
-          Copy-Item docs/TROUBLESHOOTING.md "$package/docs/"
-
-          Compress-Archive -Path "$package/*" -DestinationPath "$package.zip" -Force
-          Get-FileHash "$package.zip" -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  $package.zip" } | Set-Content "$package.zip.sha256"
-
-      - name: Smoke-test assembled package
-        shell: pwsh
-        run: |
-          $version = '${{ github.ref_name }}'
-          $package = "codex-quota-orchestrator-$version-windows-x64"
-          $smoke = Join-Path $PWD "smoke-package"
-          Remove-Item $smoke -Recurse -Force -ErrorAction SilentlyContinue
-          Expand-Archive "$package.zip" -DestinationPath $smoke -Force
+          $tag = '${{ github.ref_name }}'
+          $installer = "CodexQuotaGuardSetup-$tag.exe"
 
           $required = @(
-            "CodexQuotaGuardSetup.exe",
-            "bin/orchestrator.exe",
-            "bin/orchestrator-daemon.exe",
-            "bin/desktop-companion.exe",
-            "config.example.json",
-            "README.md",
-            "docs/WINDOWS_SETUP.md",
-            "docs/ARCHITECTURE.md",
-            "docs/TROUBLESHOOTING.md"
+            'bin/orchestrator.exe',
+            'bin/orchestrator-daemon.exe',
+            'bin/desktop-companion.exe',
+            'installer/CodexQuotaGuard.iss'
           )
-
           foreach ($relative in $required) {
-            $path = Join-Path $smoke $relative
-            if (-not (Test-Path $path -PathType Leaf)) {
-              throw "Release package missing required file: $relative"
-            }
-            if ((Get-Item $path).Length -le 0) {
-              throw "Release package contains empty file: $relative"
+            if (-not (Test-Path $relative -PathType Leaf)) {
+              throw "Release build missing required file: $relative"
             }
           }
 
-          $actualVersion = & (Join-Path $smoke "bin/orchestrator.exe") version
+          $actualVersion = & .\bin\orchestrator.exe version
           if ($LASTEXITCODE -ne 0) {
-            throw "Packaged orchestrator.exe version command failed"
+            throw 'orchestrator.exe version command failed'
           }
-          if ($actualVersion.Trim() -ne $version) {
-            throw "Version mismatch: tag=$version packaged=$actualVersion"
+          if ($actualVersion.Trim() -ne $tag) {
+            throw "Version mismatch: tag=$tag binary=$actualVersion"
           }
 
-          $hashLine = Get-Content "$package.zip.sha256" -Raw
+          if (-not (Test-Path $installer -PathType Leaf)) {
+            throw "Installer missing: $installer"
+          }
+          if ((Get-Item $installer).Length -le 0) {
+            throw "Installer is empty: $installer"
+          }
+
+          Get-FileHash $installer -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $installer" } |
+            Set-Content "$installer.sha256"
+
+          $hashLine = Get-Content "$installer.sha256" -Raw
           $expectedHash = ($hashLine -split '\s+')[0].Trim().ToLower()
-          $actualHash = (Get-FileHash "$package.zip" -Algorithm SHA256).Hash.ToLower()
+          $actualHash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
           if ($expectedHash -ne $actualHash) {
-            throw "SHA256 sidecar does not match assembled ZIP"
+            throw 'SHA256 sidecar does not match installer'
           }
 
-          Write-Host "Release package smoke test passed for $version"
+          Write-Host "Installer smoke test passed for $tag"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            codex-quota-orchestrator-${{ github.ref_name }}-windows-x64.zip
-            codex-quota-orchestrator-${{ github.ref_name }}-windows-x64.zip.sha256
+            CodexQuotaGuardSetup-${{ github.ref_name }}.exe
+            CodexQuotaGuardSetup-${{ github.ref_name }}.exe.sha256
