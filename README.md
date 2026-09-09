@@ -2,7 +2,7 @@
 
 Desktop-first quota-aware orchestration and local task management for Codex.
 
-Codex Desktop stays the owner and UI for real work. The guard monitors ChatGPT/Codex quota, persists checkpoints and task state, cooperatively pauses work at safe boundaries, sends a continuation back into the same Desktop thread when quota is available again, and now includes a local dashboard for project/task management.
+Codex Desktop stays the owner and UI for real work. The guard monitors ChatGPT/Codex quota, persists checkpoints and task state, cooperatively pauses work at safe boundaries, sends a continuation back into the same Desktop thread when quota is available again, and includes a local dashboard for project/task management.
 
 ## Current capabilities
 
@@ -17,6 +17,7 @@ Codex Desktop stays the owner and UI for real work. The guard monitors ChatGPT/C
 - Local web dashboard embedded directly in `orchestrator.exe`.
 - Project/workspace grouping with automatic project creation from task workspace paths.
 - Project CRUD and safe task management (edit metadata, pause, cancel, recover, archive/delete terminal tasks).
+- Sequential task queues per project: add work while another task is running and automatically dispatch the next item after successful completion.
 - Task event timeline and quota/task overview.
 - Single-instance daemon behavior.
 - Windows installer with stable `%LOCALAPPDATA%` binary paths and per-user autostart.
@@ -54,11 +55,53 @@ The dashboard provides:
 - cooperative pause and cancel actions;
 - `NEEDS_REVIEW` recovery actions;
 - task state-event timeline;
-- terminal task deletion.
+- terminal task deletion;
+- a **Task Queue** view for adding and ordering future work per project.
 
 Existing tasks with a workspace path are backfilled into projects the next time the daemon starts. New task registrations automatically create or reuse a project for their workspace.
 
 The dashboard has no separate runtime dependency: its HTML/CSS/JS assets are embedded into the Go binary.
+
+## Sequential project task queue
+
+Open **Task Queue** from the dashboard or browse to:
+
+```text
+http://127.0.0.1:47631/queue.html
+```
+
+Each project has an independent FIFO-style queue. You can add an objective and optional details/acceptance criteria while the current project task is still running.
+
+Example:
+
+```text
+Project: DotRadar
+
+RUNNING  Implement SARIF output
+QUEUED   Add GitHub Actions integration
+QUEUED   Improve README examples
+```
+
+When `Implement SARIF output` calls `task_complete`, the daemon checks quota and project state. If quota is healthy, it dispatches `Add GitHub Actions integration` into the project's most recently completed Codex Desktop thread through the same crash-safe native action pipeline. When that task completes, the next queued item can start.
+
+Queue safety rules:
+
+- at most one queued work item runs per project;
+- the queue advances only after the previous managed task reaches `COMPLETED`;
+- `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` stop automatic advancement;
+- low quota keeps future work in `QUEUED` until quota is resumable;
+- an uncertain native send marks the queue item `NEEDS_REVIEW` instead of blindly retrying;
+- a project that has never had a Codex Desktop thread keeps queued work waiting until a managed thread exists.
+
+Queue item lifecycle:
+
+```text
+QUEUED -> DISPATCHING -> RUNNING -> COMPLETED
+                         |
+                         +-> NEEDS_REVIEW (uncertain delivery)
+```
+
+Queued items may be edited, reordered, cancelled, or deleted before dispatch.
 
 ## Important limitation
 
@@ -135,6 +178,13 @@ POST   /v1/dashboard/tasks/{id}/pause
 POST   /v1/dashboard/tasks/{id}/cancel
 POST   /v1/dashboard/tasks/{id}/retry
 POST   /v1/dashboard/tasks/{id}/running
+
+GET    /v1/project-tasks?projectId={id}
+POST   /v1/project-tasks
+GET    /v1/project-tasks/{id}
+PATCH  /v1/project-tasks/{id}
+DELETE /v1/project-tasks/{id}
+POST   /v1/project-tasks/{id}/cancel
 ```
 
 Task state is not freely PATCHable. Lifecycle changes still go through the existing state machine.
@@ -173,13 +223,13 @@ cmd/
   desktop-companion/  MCP server launched by Codex Desktop
 internal/
   codexquota/         quota-only app-server client
-  daemon/             quota monitor + local control/dashboard API
+  daemon/             quota monitor + local control/dashboard API + project queue scheduler
   desktop/            Windows native Desktop delivery
   mcpserver/          MCP tools + background action delivery
-  store/              SQLite persistence, projects/task metadata and action lifecycle
-  domain/             task/project models and task states
+  store/              SQLite persistence, projects/task metadata, project queues and action lifecycle
+  domain/             task/project/queue models and task states
   quota/              deterministic policy
-  webui/              embedded local dashboard
+  webui/              embedded local dashboard and task queue UI
 scripts/
   install-windows.ps1
   uninstall-windows.ps1
