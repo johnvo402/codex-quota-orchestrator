@@ -96,16 +96,61 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 		return
 	}
 	if s.policy.CanResume(snap) {
-		pending, _ := s.store.ListStates(ctx, domain.StatePauseRequested)
+		// Nếu quota hồi phục trước khi task thực sự pause,
+		// trả PAUSE_REQUESTED về RUNNING.
+		pending, _ := s.store.ListStates(
+			ctx,
+			domain.StatePauseRequested,
+		)
+
 		for _, t := range pending {
-			_, _ = s.store.Transition(ctx, t.ThreadID, domain.StateRunning, "quota recovered before pause")
+			_, err := s.store.Transition(
+				ctx,
+				t.ThreadID,
+				domain.StateRunning,
+				"quota recovered before cooperative pause completed",
+			)
+
+			if err != nil {
+				s.log.Warn(
+					"restore pause-requested task",
+					"thread", t.ThreadID,
+					"error", err,
+				)
+			}
 		}
-		paused, _ := s.store.ListStates(ctx, domain.StatePausedQuota)
+
+		paused, _ := s.store.ListStates(
+			ctx,
+			domain.StatePausedQuota,
+		)
+
 		for _, t := range paused {
-			if _, err := s.store.Transition(ctx, t.ThreadID, domain.StateResumeQueued, "quota recovered"); err != nil {
+			action, err := s.store.QueueResume(
+				ctx,
+				t.ThreadID,
+				resumeMessage(t, snap),
+			)
+
+			if err != nil {
+				s.log.Error(
+					"queue Desktop resume",
+					"thread", t.ThreadID,
+					"error", err,
+				)
+
 				continue
 			}
-			_, _ = s.store.EnqueueAction(ctx, "resume", t.ThreadID, resumeMessage(t, snap))
+
+			s.log.Info(
+				"Desktop resume queued",
+				"thread", t.ThreadID,
+				"actionId", action.ID,
+				"fiveHourRemaining",
+				snap.FiveHour.RemainingPercent,
+				"weeklyRemaining",
+				snap.Weekly.RemainingPercent,
+			)
 		}
 	}
 }

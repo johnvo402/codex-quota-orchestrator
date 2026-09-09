@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -40,9 +39,20 @@ func SaveRelay(path string, v RelayConfig) error {
 	return os.Rename(tmp, path)
 }
 
+type NativeDiagnostics struct {
+	Available          bool   `json:"available"`
+	Source             string `json:"source"`
+	Pipe               string `json:"pipe,omitempty"`
+	ExecutorConfigured bool   `json:"executorConfigured"`
+	EnvironmentHasPipe bool   `json:"environmentHasPipe"`
+	ParentPID          int    `json:"parentPid,omitempty"`
+}
+
 type NativeSender interface {
 	Available() bool
 	Description() string
+	Diagnostics() NativeDiagnostics
+	Probe(context.Context) error
 	SendMessage(context.Context, string, string) error
 }
 
@@ -59,26 +69,4 @@ func nativeRequest(executor, target, message string, id string) map[string]any {
 			"tool": "send_message_to_thread", "turnId": id,
 		},
 	}
-}
-
-func validateNativeResponse(b []byte) error {
-	var r struct {
-		Error *struct {
-			Code    int    `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-		Result struct {
-			Success bool `json:"success"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(b, &r); err != nil {
-		return fmt.Errorf("decode native response: %w", err)
-	}
-	if r.Error != nil {
-		return fmt.Errorf("native tools rpc %d: %s", r.Error.Code, r.Error.Message)
-	}
-	if !r.Result.Success {
-		return errors.New("Desktop native tool returned success=false")
-	}
-	return nil
 }

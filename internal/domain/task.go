@@ -12,8 +12,12 @@ const (
 	StatePauseRequested TaskState = "PAUSE_REQUESTED"
 	StatePausedQuota    TaskState = "PAUSED_QUOTA"
 	StateResumeQueued   TaskState = "RESUME_QUEUED"
-	StateCompleted      TaskState = "COMPLETED"
-	StateCancelled      TaskState = "CANCELLED"
+
+	StateNeedsReview TaskState = "NEEDS_REVIEW"
+
+	StateCompleted TaskState = "COMPLETED"
+	StateFailed    TaskState = "FAILED"
+	StateCancelled TaskState = "CANCELLED"
 )
 
 type Task struct {

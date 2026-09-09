@@ -155,43 +155,81 @@ func (s *Server) actions(w http.ResponseWriter, r *http.Request) {
 	}
 	jsonOut(w, 200, items)
 }
-func (s *Server) actionAck(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "POST" {
-		w.WriteHeader(405)
+func (s *Server) actionAck(
+	w http.ResponseWriter,
+	r *http.Request,
+) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(
+			http.StatusMethodNotAllowed,
+		)
 		return
 	}
-	idText := strings.TrimPrefix(r.URL.Path, "/v1/actions/")
-	idText = strings.TrimSuffix(idText, "/ack")
-	id, err := strconv.ParseInt(strings.Trim(idText, "/"), 10, 64)
+
+	idText := strings.TrimPrefix(
+		r.URL.Path,
+		"/v1/actions/",
+	)
+
+	idText = strings.TrimSuffix(
+		idText,
+		"/ack",
+	)
+
+	id, err := strconv.ParseInt(
+		strings.Trim(idText, "/"),
+		10,
+		64,
+	)
+
 	if err != nil {
-		httpErr(w, 400, err)
+		httpErr(
+			w,
+			http.StatusBadRequest,
+			err,
+		)
 		return
 	}
+
 	var body struct {
 		Success bool   `json:"success"`
 		Error   string `json:"error"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httpErr(w, 400, err)
+
+	if err := json.NewDecoder(
+		r.Body,
+	).Decode(&body); err != nil {
+		httpErr(
+			w,
+			http.StatusBadRequest,
+			err,
+		)
 		return
 	}
-	a, err := s.store.GetAction(r.Context(), id)
-	if err != nil {
-		httpErr(w, 404, err)
+
+	if err := s.store.CompleteAction(
+		r.Context(),
+		id,
+		body.Success,
+		body.Error,
+	); err != nil {
+		httpErr(
+			w,
+			http.StatusInternalServerError,
+			err,
+		)
 		return
 	}
-	if err := s.store.AckAction(r.Context(), id, body.Success); err != nil {
-		httpErr(w, 500, err)
-		return
-	}
-	if body.Success && a.Kind == "resume" {
-		_, _ = s.store.Transition(r.Context(), a.ThreadID, domain.StateRunning, "resume delivered")
-	}
-	if !body.Success && a.Kind == "resume" {
-		_, _ = s.store.Transition(r.Context(), a.ThreadID, domain.StatePausedQuota, "resume delivery failed")
-	}
-	jsonOut(w, 200, map[string]any{"ok": true})
+
+	jsonOut(
+		w,
+		http.StatusOK,
+		map[string]any{
+			"ok": true,
+		},
+	)
 }
+
 func jsonOut(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

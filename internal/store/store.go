@@ -10,10 +10,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"codex-desktop-quota-guard/internal/domain"
 	"codex-desktop-quota-guard/internal/quota"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -458,4 +460,342 @@ func scanTask(s scanner) (domain.Task, error) {
 	t.CreatedAt = time.UnixMilli(created)
 	t.UpdatedAt = time.UnixMilli(updated)
 	return t, nil
+}
+func (s *Store) QueueResume(
+	ctx context.Context,
+	threadID string,
+	message string,
+) (Action, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Action{}, err
+	}
+	defer tx.Rollback()
+
+	var (
+		taskID   string
+		stateRaw string
+	)
+
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT id, state
+		 FROM tasks
+		 WHERE thread_id = ?`,
+		threadID,
+	).Scan(
+		&taskID,
+		&stateRaw,
+	)
+
+	if err != nil {
+		return Action{}, err
+	}
+
+	state := domain.TaskState(stateRaw)
+
+	// Idempotency:
+	// nếu task đã RESUME_QUEUED và action vẫn pending,
+	// trả action hiện tại, không tạo duplicate.
+	if state == domain.StateResumeQueued {
+		var (
+			a         Action
+			createdAt int64
+		)
+
+		err := tx.QueryRowContext(
+			ctx,
+			`SELECT id, kind, thread_id, message, created_at
+			 FROM actions
+			 WHERE kind = 'resume'
+			   AND thread_id = ?
+			   AND status = 'pending'
+			 ORDER BY id DESC
+			 LIMIT 1`,
+			threadID,
+		).Scan(
+			&a.ID,
+			&a.Kind,
+			&a.ThreadID,
+			&a.Message,
+			&createdAt,
+		)
+
+		if err == nil {
+			a.CreatedAt = time.UnixMilli(createdAt)
+
+			if err := tx.Commit(); err != nil {
+				return Action{}, err
+			}
+
+			return a, nil
+		}
+
+		// Có thể là state cũ bị crash sau khi transition
+		// nhưng trước khi insert action.
+		// Ta repair bằng cách insert action bên dưới.
+		if !errors.Is(err, sql.ErrNoRows) {
+			return Action{}, err
+		}
+	}
+
+	if state != domain.StatePausedQuota &&
+		state != domain.StateResumeQueued {
+		return Action{}, fmt.Errorf(
+			"cannot queue resume for task in state %s",
+			state,
+		)
+	}
+
+	now := time.Now().UTC().UnixMilli()
+
+	result, err := tx.ExecContext(
+		ctx,
+		`INSERT INTO actions(
+			kind,
+			thread_id,
+			message,
+			status,
+			created_at,
+			updated_at
+		)
+		VALUES(
+			'resume',
+			?,
+			?,
+			'pending',
+			?,
+			?
+		)`,
+		threadID,
+		message,
+		now,
+		now,
+	)
+
+	if err != nil {
+		return Action{}, err
+	}
+
+	actionID, err := result.LastInsertId()
+	if err != nil {
+		return Action{}, err
+	}
+
+	if state == domain.StatePausedQuota {
+		if err := domain.ValidateTransition(
+			state,
+			domain.StateResumeQueued,
+		); err != nil {
+			return Action{}, err
+		}
+
+		_, err = tx.ExecContext(
+			ctx,
+			`UPDATE tasks
+			 SET state = ?,
+			     pause_reason = ?,
+			     updated_at = ?
+			 WHERE thread_id = ?`,
+			domain.StateResumeQueued,
+			"quota recovered",
+			now,
+			threadID,
+		)
+
+		if err != nil {
+			return Action{}, err
+		}
+
+		_, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO task_events(
+				task_id,
+				from_state,
+				to_state,
+				reason,
+				created_at
+			)
+			VALUES(?,?,?,?,?)`,
+			taskID,
+			state,
+			domain.StateResumeQueued,
+			"quota recovered; resume delivery queued",
+			now,
+		)
+
+		if err != nil {
+			return Action{}, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return Action{}, err
+	}
+
+	return Action{
+		ID:        actionID,
+		Kind:      "resume",
+		ThreadID:  threadID,
+		Message:   message,
+		CreatedAt: time.UnixMilli(now),
+	}, nil
+}
+func (s *Store) CompleteAction(
+	ctx context.Context,
+	actionID int64,
+	success bool,
+	errorText string,
+) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var (
+		kind     string
+		threadID string
+		status   string
+	)
+
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT kind, thread_id, status
+		 FROM actions
+		 WHERE id = ?`,
+		actionID,
+	).Scan(
+		&kind,
+		&threadID,
+		&status,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	// Ack duplicate => no-op.
+	if status != "pending" {
+		return tx.Commit()
+	}
+
+	newStatus := "done"
+	if !success {
+		newStatus = "failed"
+	}
+
+	now := time.Now().UTC().UnixMilli()
+
+	_, err = tx.ExecContext(
+		ctx,
+		`UPDATE actions
+		 SET status = ?,
+		     updated_at = ?
+		 WHERE id = ?`,
+		newStatus,
+		now,
+		actionID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	// pause_notice chỉ cần acknowledge.
+	if kind != "resume" {
+		return tx.Commit()
+	}
+
+	var (
+		taskID       string
+		currentState string
+	)
+
+	err = tx.QueryRowContext(
+		ctx,
+		`SELECT id, state
+		 FROM tasks
+		 WHERE thread_id = ?`,
+		threadID,
+	).Scan(
+		&taskID,
+		&currentState,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	from := domain.TaskState(currentState)
+
+	// Task đã được thay đổi bởi user/process khác.
+	// Không được force state.
+	if from != domain.StateResumeQueued {
+		return tx.Commit()
+	}
+
+	target := domain.StateRunning
+	reason := "resume message delivered to Desktop thread"
+
+	if !success {
+		target = domain.StatePausedQuota
+		reason = "resume delivery failed"
+
+		if strings.TrimSpace(errorText) != "" {
+			reason += ": " + errorText
+		}
+	}
+
+	if err := domain.ValidateTransition(
+		from,
+		target,
+	); err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`UPDATE tasks
+		 SET state = ?,
+		     pause_reason = ?,
+		     updated_at = ?
+		 WHERE thread_id = ?`,
+		target,
+		func() string {
+			if success {
+				return ""
+			}
+			return "resume_delivery_failed"
+		}(),
+		now,
+		threadID,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	_, err = tx.ExecContext(
+		ctx,
+		`INSERT INTO task_events(
+			task_id,
+			from_state,
+			to_state,
+			reason,
+			created_at
+		)
+		VALUES(?,?,?,?,?)`,
+		taskID,
+		from,
+		target,
+		reason,
+		now,
+	)
+
+	if err != nil {
+		return err
+	}
+
+	return tx.Commit()
 }

@@ -17,3 +17,16 @@ func (unsupportedNativeSender) Description() string {
 func (unsupportedNativeSender) SendMessage(context.Context, string, string) error {
 	return errors.New("Desktop native relay is Windows-only in this MVP")
 }
+func (unsupportedNativeSender) Diagnostics() NativeDiagnostics {
+	return NativeDiagnostics{
+		Available: false,
+		Source:    "unsupported_platform",
+	}
+}
+func (unsupportedNativeSender) Probe(
+	ctx context.Context,
+) error {
+	return errors.New(
+		"Desktop native tools unsupported on this platform",
+	)
+}

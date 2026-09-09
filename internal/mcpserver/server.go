@@ -108,6 +108,22 @@ func toolList() []any {
 		tool("task_mark_paused", "Mark the current Desktop task paused for quota. Call only after reaching a safe boundary; then finish the current turn.", map[string]any{"type": "object", "properties": map[string]any{"reason": map[string]any{"type": "string"}}}),
 		tool("task_complete", "Mark the managed Desktop task complete.", map[string]any{"type": "object", "properties": map[string]any{"summary": map[string]any{"type": "string"}}}),
 		tool("desktop_guard_status", "Show guard/daemon/native delivery status for the current Desktop task.", map[string]any{"type": "object", "properties": map[string]any{}}),
+		tool("desktop_native_test_send", "Send a test message to a Codex Desktop thread through the native Desktop tools pipe. Debug only.", map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"targetThreadId": map[string]any{
+					"type":        "string",
+					"description": "Destination Codex Desktop thread ID.",
+				},
+				"message": map[string]any{
+					"type":        "string",
+					"description": "Optional test message.",
+				},
+			},
+			"required": []string{
+				"targetThreadId",
+			},
+		}),
 	}
 }
 func tool(name, desc string, schema any) any {
@@ -166,24 +182,157 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 		return toolOK("Task marked completed.", nil), nil
 	case "desktop_guard_status":
 		q, d, err := s.daemon.quota(ctx)
+
 		if err != nil {
 			return toolError(err.Error()), nil
 		}
-		relay, _ := desktop.LoadRelay(s.cfg.RelayPath())
-		sender := desktop.NewNativeSender(relay.ExecutorThreadID)
+
+		relay, relayErr := desktop.LoadRelay(
+			s.cfg.RelayPath(),
+		)
+
+		var sender desktop.NativeSender
+
+		if relayErr == nil {
+			sender = desktop.NewNativeSender(
+				relay.ExecutorThreadID,
+			)
+		}
+
+		nativeConfigured := false
+		nativeReachable := false
+		nativeDescription := "relay not configured"
+		nativeProbeError := ""
+
+		var diagnostics any
+
+		if sender != nil {
+			nativeConfigured = sender.Available()
+			nativeDescription = sender.Description()
+			diagnostics = sender.Diagnostics()
+
+			if nativeConfigured {
+				probeCtx, cancel := context.WithTimeout(
+					ctx,
+					5*time.Second,
+				)
+
+				probeErr := sender.Probe(probeCtx)
+
+				cancel()
+
+				if probeErr == nil {
+					nativeReachable = true
+				} else {
+					nativeProbeError = probeErr.Error()
+				}
+			}
+		}
+
 		return toolOK(
 			fmt.Sprintf(
-				"%s; action=%s; native=%v (%s)",
+				"%s; action=%s; nativeConfigured=%v; nativeReachable=%v; %s",
 				describeQuota(q),
 				d.Action,
-				sender.Available(),
-				sender.Description(),
+				nativeConfigured,
+				nativeReachable,
+				nativeDescription,
 			),
 			map[string]any{
-				"quota":             q,
-				"decision":          d,
-				"nativeAvailable":   sender.Available(),
-				"nativeDescription": sender.Description(),
+				"quota":    q,
+				"decision": d,
+
+				"nativeAvailable":  nativeReachable,
+				"nativeConfigured": nativeConfigured,
+				"nativeReachable":  nativeReachable,
+
+				"nativeDescription": nativeDescription,
+				"nativeProbeError":  nativeProbeError,
+				"nativeDiagnostics": diagnostics,
+			},
+		), nil
+	case "desktop_native_test_send":
+		targetThreadID, _ := p.Arguments["targetThreadId"].(string)
+		targetThreadID = strings.TrimSpace(targetThreadID)
+
+		if targetThreadID == "" {
+			return toolError(
+				"targetThreadId is required",
+			), nil
+		}
+
+		message, _ := p.Arguments["message"].(string)
+		message = strings.TrimSpace(message)
+
+		if message == "" {
+			message =
+				"[Desktop Quota Guard] Native delivery test succeeded. " +
+					"This message was sent through the Codex Desktop native tools pipe."
+		}
+
+		relay, err := desktop.LoadRelay(
+			s.cfg.RelayPath(),
+		)
+
+		if err != nil {
+			return toolError(
+				"relay unavailable: " + err.Error(),
+			), nil
+		}
+
+		sender := desktop.NewNativeSender(
+			relay.ExecutorThreadID,
+		)
+
+		if !sender.Available() {
+			return toolError(
+				"native Desktop delivery unavailable: " +
+					sender.Description(),
+			), nil
+		}
+
+		probeCtx, cancel := context.WithTimeout(
+			ctx,
+			5*time.Second,
+		)
+
+		err = sender.Probe(probeCtx)
+
+		cancel()
+
+		if err != nil {
+			return toolError(
+				"native Desktop probe failed: " +
+					err.Error(),
+			), nil
+		}
+
+		sendCtx, cancel := context.WithTimeout(
+			ctx,
+			20*time.Second,
+		)
+
+		err = sender.SendMessage(
+			sendCtx,
+			targetThreadID,
+			message,
+		)
+
+		cancel()
+
+		if err != nil {
+			return toolError(
+				"native Desktop send failed: " +
+					err.Error(),
+			), nil
+		}
+
+		return toolOK(
+			"Native Desktop test message sent successfully.",
+			map[string]any{
+				"success":        true,
+				"targetThreadId": targetThreadID,
+				"native":         sender.Diagnostics(),
 			},
 		), nil
 	default:
@@ -203,29 +352,108 @@ func (s *Server) actionPump(ctx context.Context) {
 		}
 	}
 }
-func (s *Server) deliverPending(ctx context.Context) {
-	relay, err := desktop.LoadRelay(s.cfg.RelayPath())
+func (s *Server) deliverPending(
+	ctx context.Context,
+) {
+	relay, err := desktop.LoadRelay(
+		s.cfg.RelayPath(),
+	)
+
 	if err != nil {
 		return
 	}
-	sender := desktop.NewNativeSender(relay.ExecutorThreadID)
+
+	sender := desktop.NewNativeSender(
+		relay.ExecutorThreadID,
+	)
+
 	if !sender.Available() {
 		return
 	}
+
 	actions, err := s.daemon.actions(ctx)
+
 	if err != nil {
 		return
 	}
-	for _, a := range actions {
-		sendCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		err := sender.SendMessage(sendCtx, a.ThreadID, a.Message)
+
+	for _, action := range actions {
+		// Probe trước khi gửi.
+		probeCtx, cancel := context.WithTimeout(
+			ctx,
+			5*time.Second,
+		)
+
+		probeErr := sender.Probe(probeCtx)
 		cancel()
-		if err != nil {
-			s.log.Warn("Desktop native delivery failed", "action", a.ID, "thread", a.ThreadID, "error", err)
-			_ = s.daemon.ack(ctx, a.ID, false, err.Error())
+
+		if probeErr != nil {
+			s.log.Warn(
+				"Desktop native probe failed",
+				"action", action.ID,
+				"error", probeErr,
+			)
+
+			// Không ack.
+			// Giữ pending để lần poll sau thử lại.
 			continue
 		}
-		_ = s.daemon.ack(ctx, a.ID, true, "")
+
+		sendCtx, cancel := context.WithTimeout(
+			ctx,
+			20*time.Second,
+		)
+
+		err := sender.SendMessage(
+			sendCtx,
+			action.ThreadID,
+			action.Message,
+		)
+
+		cancel()
+
+		if err != nil {
+			s.log.Warn(
+				"Desktop native delivery failed",
+				"action", action.ID,
+				"thread", action.ThreadID,
+				"error", err,
+			)
+
+			// Delivery thật sự được attempted nhưng fail.
+			// Ack failed để task quay về PAUSED_QUOTA,
+			// scheduler có thể retry ở tick sau.
+			_ = s.daemon.ack(
+				ctx,
+				action.ID,
+				false,
+				err.Error(),
+			)
+
+			continue
+		}
+
+		if err := s.daemon.ack(
+			ctx,
+			action.ID,
+			true,
+			"",
+		); err != nil {
+			s.log.Error(
+				"ack Desktop action failed",
+				"action", action.ID,
+				"error", err,
+			)
+
+			continue
+		}
+
+		s.log.Info(
+			"Desktop action delivered",
+			"action", action.ID,
+			"kind", action.Kind,
+			"thread", action.ThreadID,
+		)
 	}
 }
 

@@ -87,18 +87,17 @@ func doctor(cfg config.Config, jsonOut bool) error {
 		policy,
 	)
 	relay, relayErr := desktop.LoadRelay(cfg.RelayPath())
-	sender := desktop.NewNativeSender(relay.ExecutorThreadID)
 	out := map[string]any{
-		"account": acct.Account,
-		"quota":   snap,
+		"account":         acct.Account,
+		"quota":           snap,
+		"rawRateLimits":   rates,
+		"relay":           relay,
+		"relayConfigured": relayErr == nil,
 
-		// DEBUG: xem response quota gốc từ Codex.
-		"rawRateLimits": rates,
-
-		"relay":             relay,
-		"relayConfigured":   relayErr == nil,
-		"nativeAvailable":   sender.Available(),
-		"nativeDescription": sender.Description(),
+		"desktopNativeCheck": map[string]any{
+			"status": "not_checked",
+			"reason": "doctor runs outside Codex Desktop; use desktop_guard_status from a Desktop task",
+		},
 	}
 	if jsonOut {
 		return printJSON(out)
@@ -134,7 +133,13 @@ func doctor(cfg config.Config, jsonOut bool) error {
 	} else {
 		fmt.Println("Relay thread:", relay.ExecutorThreadID)
 	}
-	fmt.Printf("Desktop native delivery: %v (%s)\n", sender.Available(), sender.Description())
+	fmt.Println(
+		"Desktop native delivery: not tested here",
+	)
+
+	fmt.Println(
+		"Use desktop_guard_status inside Codex Desktop.",
+	)
 	return nil
 }
 
