@@ -43,6 +43,18 @@ CREATE TABLE IF NOT EXISTS project_queue_settings(
  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
 );
 `)
+	if err != nil {
+		return err
+	}
+	// Repair position values created by older releases before adding the
+	// database-level invariant. Relative queue order is preserved.
+	if err := s.NormalizeAllProjectQueues(context.Background()); err != nil {
+		return fmt.Errorf("normalize legacy project queues: %w", err)
+	}
+	_, err = s.db.Exec(`
+CREATE UNIQUE INDEX IF NOT EXISTS idx_project_tasks_unique_queued_position
+ON project_tasks(project_id,position) WHERE state='QUEUED';
+`)
 	return err
 }
 
@@ -137,8 +149,15 @@ func (s *Store) DeleteProjectTask(ctx context.Context, id string) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM project_tasks WHERE id=? AND state='QUEUED'`, id); err != nil {
+	res, err := tx.ExecContext(ctx, `DELETE FROM project_tasks WHERE id=? AND state='QUEUED'`, id)
+	if err != nil {
 		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return err
+		}
+		return errors.New("queue changed while deleting project task")
 	}
 	if err := normalizeQueuedProjectTasksTx(ctx, tx, v.ProjectID); err != nil {
 		return err
@@ -168,8 +187,15 @@ func (s *Store) CancelProjectTask(ctx context.Context, id string) (domain.Projec
 		return domain.ProjectTask{}, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE project_tasks SET state='CANCELLED',updated_at=?,completed_at=? WHERE id=? AND state='QUEUED'`, now, now, id); err != nil {
+	res, err := tx.ExecContext(ctx, `UPDATE project_tasks SET state='CANCELLED',updated_at=?,completed_at=? WHERE id=? AND state='QUEUED'`, now, now, id)
+	if err != nil {
 		return domain.ProjectTask{}, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return domain.ProjectTask{}, err
+		}
+		return domain.ProjectTask{}, errors.New("queue changed while cancelling project task")
 	}
 	if err := normalizeQueuedProjectTasksTx(ctx, tx, v.ProjectID); err != nil {
 		return domain.ProjectTask{}, err
@@ -242,8 +268,15 @@ func (s *Store) QueueProjectTaskDispatch(ctx context.Context, itemID, threadID, 
 	if err != nil {
 		return Action{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE project_tasks SET state='DISPATCHING',target_thread_id=?,action_id=?,updated_at=? WHERE id=?`, threadID, actionID, now, itemID); err != nil {
+	res, err = tx.ExecContext(ctx, `UPDATE project_tasks SET state='DISPATCHING',target_thread_id=?,action_id=?,updated_at=? WHERE id=? AND state='QUEUED'`, threadID, actionID, now, itemID)
+	if err != nil {
 		return Action{}, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		if err != nil {
+			return Action{}, err
+		}
+		return Action{}, errors.New("queue changed while dispatching project task")
 	}
 	if err := normalizeQueuedProjectTasksTx(ctx, tx, projectID); err != nil {
 		return Action{}, err
