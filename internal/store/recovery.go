@@ -13,9 +13,6 @@ import (
 
 var ErrActionNotPending = errors.New("action is not pending")
 
-// QueueResumeSafe queues at most one active resume action for a task. Both
-// pending and delivering actions count as active so a daemon tick cannot create
-// a duplicate while the companion is already performing the Desktop side effect.
 func (s *Store) QueueResumeSafe(ctx context.Context, threadID, message string) (Action, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -88,10 +85,6 @@ VALUES('resume',?,?,'pending',?,?)
 	return Action{ID: actionID, Kind: "resume", ThreadID: threadID, Message: message, CreatedAt: time.UnixMilli(now)}, nil
 }
 
-// ClaimAction atomically moves a pending action into delivering state.
-// Only the process that wins this update is allowed to perform the external
-// Desktop side effect. This prevents two companion workers from sending the
-// same resume message concurrently.
 func (s *Store) ClaimAction(ctx context.Context, actionID int64) error {
 	now := time.Now().UTC().UnixMilli()
 	result, err := s.db.ExecContext(ctx, `
@@ -112,9 +105,6 @@ WHERE id=? AND status='pending'
 	return nil
 }
 
-// CompleteClaimedAction completes an action that has already been claimed.
-// For resume actions, the task transition and action completion happen in the
-// same SQLite transaction.
 func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, success bool, errorText string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -141,6 +131,14 @@ func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, succe
 	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,updated_at=? WHERE id=?`, newStatus, now, actionID); err != nil {
 		return err
 	}
+
+	if isProjectTaskAction(kind) {
+		if err := completeProjectTaskActionTx(ctx, tx, kind, threadID, success, errorText, now); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
 	if kind != "resume" {
 		return tx.Commit()
 	}
@@ -177,10 +175,6 @@ func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, succe
 	return tx.Commit()
 }
 
-// MarkActionUncertain records that an external delivery was attempted but its
-// outcome cannot be proven. Resume actions are moved to NEEDS_REVIEW rather
-// than retried automatically because the Desktop thread may already have
-// received the continuation message.
 func (s *Store) MarkActionUncertain(ctx context.Context, actionID int64, reason string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -203,6 +197,14 @@ func (s *Store) MarkActionUncertain(ctx context.Context, actionID int64, reason 
 	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status='uncertain',updated_at=? WHERE id=?`, now, actionID); err != nil {
 		return err
 	}
+
+	if isProjectTaskAction(kind) {
+		if err := markProjectTaskActionUncertainTx(ctx, tx, kind, reason, now); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
 	if kind != "resume" {
 		return tx.Commit()
 	}
@@ -233,8 +235,6 @@ func (s *Store) MarkActionUncertain(ctx context.Context, actionID int64, reason 
 	return tx.Commit()
 }
 
-// RecoverStaleDeliveries converts abandoned delivering actions into an explicit
-// uncertain state. It intentionally does not resend anything.
 func (s *Store) RecoverStaleDeliveries(ctx context.Context, olderThan time.Time) (int, error) {
 	rows, err := s.db.QueryContext(ctx, `
 SELECT id
