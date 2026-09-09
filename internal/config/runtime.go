@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -26,6 +28,9 @@ func RuntimePath(dataDir string) string {
 func SaveRuntime(dataDir string, v DaemonRuntime) error {
 	if dataDir == "" {
 		return errors.New("dataDir required")
+	}
+	if !runtimeListenAddrAllowed(v.ListenAddr) {
+		return errors.New("runtime listenAddr must be loopback")
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		return fmt.Errorf("create runtime directory: %w", err)
@@ -63,8 +68,8 @@ func LoadRuntime(dataDir string) (DaemonRuntime, error) {
 	if err := json.Unmarshal(b, &v); err != nil {
 		return DaemonRuntime{}, err
 	}
-	if v.ListenAddr == "" {
-		return DaemonRuntime{}, errors.New("runtime listenAddr missing")
+	if !runtimeListenAddrAllowed(v.ListenAddr) {
+		return DaemonRuntime{}, errors.New("runtime listenAddr must be loopback")
 	}
 	return v, nil
 }
@@ -84,4 +89,16 @@ func RemoveRuntimeIfPID(dataDir string, pid int) error {
 		return err
 	}
 	return nil
+}
+
+func runtimeListenAddrAllowed(addr string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(addr))
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
