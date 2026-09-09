@@ -46,19 +46,19 @@ var (
 )
 
 type installPaths struct {
-	packageRoot string
-	installRoot string
-	installBin  string
-	dataDir     string
-	setupSource string
-	orchSource  string
-	daemonSource string
+	packageRoot     string
+	installRoot     string
+	installBin      string
+	dataDir         string
+	setupSource     string
+	orchSource      string
+	daemonSource    string
 	companionSource string
-	orchestrator string
-	orch         string
-	daemon       string
-	companion    string
-	uninstaller  string
+	orchestrator    string
+	orch            string
+	daemon          string
+	companion       string
+	uninstaller     string
 }
 
 func main() {
@@ -170,8 +170,6 @@ func install() error {
 		return errors.New("Codex CLI was not found in PATH. Install/login to Codex first, then run setup again")
 	}
 
-	// Remove old launchers before replacing files. This also upgrades installs
-	// created by the previous PowerShell installer.
 	_ = removeMCP()
 	removeLegacyScheduledTask()
 	_ = removeRunEntry()
@@ -368,14 +366,14 @@ func registerUninstaller(p installPaths) error {
 	}
 	defer key.Close()
 	values := map[string]string{
-		"DisplayName":     appName,
-		"DisplayVersion":  strings.TrimPrefix(version, "v"),
-		"Publisher":       "johnvo402",
-		"InstallLocation": p.installRoot,
-		"DisplayIcon":     p.orch,
-		"UninstallString": fmt.Sprintf("\"%s\" uninstall", p.uninstaller),
+		"DisplayName":          appName,
+		"DisplayVersion":       strings.TrimPrefix(version, "v"),
+		"Publisher":            "johnvo402",
+		"InstallLocation":      p.installRoot,
+		"DisplayIcon":          p.orch,
+		"UninstallString":      fmt.Sprintf("\"%s\" uninstall", p.uninstaller),
 		"QuietUninstallString": fmt.Sprintf("\"%s\" uninstall --silent", p.uninstaller),
-		"URLInfoAbout":    "https://github.com/johnvo402/codex-quota-orchestrator",
+		"URLInfoAbout":         "https://github.com/johnvo402/codex-quota-orchestrator",
 	}
 	for name, value := range values {
 		if err := key.SetStringValue(name, value); err != nil {
@@ -555,7 +553,7 @@ func runHidden(name string, args ...string) (string, error) {
 		}
 		cmd = exec.Command(comspec)
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:     true,
+			HideWindow:    true,
 			CreationFlags: createNoWindow,
 			CmdLine:       `/d /s /c "` + strings.Join(pieces, " ") + `"`,
 		}
