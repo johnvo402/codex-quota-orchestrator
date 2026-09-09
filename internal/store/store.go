@@ -53,6 +53,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := s.ensureProjectQueueSchema(); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return s, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
@@ -212,162 +216,58 @@ func (s *Store) UpdateTaskQuota(ctx context.Context, threadID string, q quota.Sn
 	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET last_quota_remaining=?,last_quota_reset_at=?,updated_at=? WHERE thread_id=?`, q.RemainingPercent, reset, time.Now().UTC().UnixMilli(), threadID)
 	return err
 }
-func (s *Store) SaveQuota(
-	ctx context.Context,
-	q quota.Snapshot,
-) error {
+func (s *Store) SaveQuota(ctx context.Context, q quota.Snapshot) error {
 	payload, err := json.Marshal(q)
 	if err != nil {
-		return fmt.Errorf(
-			"marshal quota snapshot: %w",
-			err,
-		)
+		return fmt.Errorf("marshal quota snapshot: %w", err)
 	}
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-
 	defer tx.Rollback()
-
-	_, err = tx.ExecContext(
-		ctx,
-		`
-INSERT INTO quota_state_v2(
-	singleton,
-	snapshot_json,
-	observed_at
-)
-VALUES(1, ?, ?)
-ON CONFLICT(singleton)
-DO UPDATE SET
-	snapshot_json = excluded.snapshot_json,
-	observed_at = excluded.observed_at
-`,
-		string(payload),
-		q.ObservedAt.UnixMilli(),
-	)
-
+	_, err = tx.ExecContext(ctx, `INSERT INTO quota_state_v2(singleton,snapshot_json,observed_at) VALUES(1,?,?) ON CONFLICT(singleton) DO UPDATE SET snapshot_json=excluded.snapshot_json,observed_at=excluded.observed_at`, string(payload), q.ObservedAt.UnixMilli())
 	if err != nil {
 		return err
 	}
-
 	var reset any
-
 	if q.ResetAt != nil {
 		reset = q.ResetAt.UnixMilli()
 	}
-
-	_, err = tx.ExecContext(
-		ctx,
-		`
-INSERT INTO quota_state(
-	singleton,
-	remaining_percent,
-	reset_at,
-	hard_pause,
-	soft_pause,
-	can_resume,
-	observed_at
-)
-VALUES(1,?,?,?,?,?,?)
-ON CONFLICT(singleton)
-DO UPDATE SET
-	remaining_percent = excluded.remaining_percent,
-	reset_at = excluded.reset_at,
-	hard_pause = excluded.hard_pause,
-	soft_pause = excluded.soft_pause,
-	can_resume = excluded.can_resume,
-	observed_at = excluded.observed_at
-`,
-		q.RemainingPercent,
-		reset,
-		boolInt(q.HardPause),
-		boolInt(q.SoftPause),
-		boolInt(q.CanResume),
-		q.ObservedAt.UnixMilli(),
-	)
-
+	_, err = tx.ExecContext(ctx, `INSERT INTO quota_state(singleton,remaining_percent,reset_at,hard_pause,soft_pause,can_resume,observed_at) VALUES(1,?,?,?,?,?,?) ON CONFLICT(singleton) DO UPDATE SET remaining_percent=excluded.remaining_percent,reset_at=excluded.reset_at,hard_pause=excluded.hard_pause,soft_pause=excluded.soft_pause,can_resume=excluded.can_resume,observed_at=excluded.observed_at`, q.RemainingPercent, reset, boolInt(q.HardPause), boolInt(q.SoftPause), boolInt(q.CanResume), q.ObservedAt.UnixMilli())
 	if err != nil {
 		return err
 	}
-
 	return tx.Commit()
 }
-func (s *Store) LatestQuota(
-	ctx context.Context,
-) (quota.Snapshot, error) {
+func (s *Store) LatestQuota(ctx context.Context) (quota.Snapshot, error) {
 	var q quota.Snapshot
 	var raw string
-
-	err := s.db.QueryRowContext(
-		ctx,
-		`
-SELECT snapshot_json
-FROM quota_state_v2
-WHERE singleton = 1
-`,
-	).Scan(&raw)
-
+	err := s.db.QueryRowContext(ctx, `SELECT snapshot_json FROM quota_state_v2 WHERE singleton=1`).Scan(&raw)
 	if err == nil {
-		if err := json.Unmarshal(
-			[]byte(raw),
-			&q,
-		); err != nil {
-			return q, fmt.Errorf(
-				"decode quota snapshot: %w",
-				err,
-			)
+		if err := json.Unmarshal([]byte(raw), &q); err != nil {
+			return q, fmt.Errorf("decode quota snapshot: %w", err)
 		}
-
 		return q, nil
 	}
-
 	if !errors.Is(err, sql.ErrNoRows) {
 		return q, err
 	}
-
 	var reset sql.NullInt64
 	var hard, soft, resume int
 	var observed int64
-
-	err = s.db.QueryRowContext(
-		ctx,
-		`
-SELECT
-	remaining_percent,
-	reset_at,
-	hard_pause,
-	soft_pause,
-	can_resume,
-	observed_at
-FROM quota_state
-WHERE singleton = 1
-`,
-	).Scan(
-		&q.RemainingPercent,
-		&reset,
-		&hard,
-		&soft,
-		&resume,
-		&observed,
-	)
-
+	err = s.db.QueryRowContext(ctx, `SELECT remaining_percent,reset_at,hard_pause,soft_pause,can_resume,observed_at FROM quota_state WHERE singleton=1`).Scan(&q.RemainingPercent, &reset, &hard, &soft, &resume, &observed)
 	if err != nil {
 		return q, err
 	}
-
 	q.HardPause = hard != 0
 	q.SoftPause = soft != 0
 	q.CanResume = resume != 0
 	q.ObservedAt = time.UnixMilli(observed)
-
 	if reset.Valid {
 		t := time.UnixMilli(reset.Int64)
 		q.ResetAt = &t
 	}
-
 	return q, nil
 }
 func (s *Store) EnqueueAction(ctx context.Context, kind, threadID, message string) (Action, error) {
@@ -459,332 +359,4 @@ func scanTask(s scanner) (domain.Task, error) {
 	t.CreatedAt = time.UnixMilli(created)
 	t.UpdatedAt = time.UnixMilli(updated)
 	return t, nil
-}
-func (s *Store) QueueResume(
-	ctx context.Context,
-	threadID string,
-	message string,
-) (Action, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Action{}, err
-	}
-	defer tx.Rollback()
-
-	var (
-		taskID   string
-		stateRaw string
-	)
-
-	err = tx.QueryRowContext(
-		ctx,
-		`SELECT id, state
-		 FROM tasks
-		 WHERE thread_id = ?`,
-		threadID,
-	).Scan(
-		&taskID,
-		&stateRaw,
-	)
-
-	if err != nil {
-		return Action{}, err
-	}
-
-	state := domain.TaskState(stateRaw)
-
-	if state == domain.StateResumeQueued {
-		var (
-			a         Action
-			createdAt int64
-		)
-
-		err := tx.QueryRowContext(
-			ctx,
-			`SELECT id, kind, thread_id, message, created_at
-			 FROM actions
-			 WHERE kind = 'resume'
-			   AND thread_id = ?
-			   AND status = 'pending'
-			 ORDER BY id DESC
-			 LIMIT 1`,
-			threadID,
-		).Scan(
-			&a.ID,
-			&a.Kind,
-			&a.ThreadID,
-			&a.Message,
-			&createdAt,
-		)
-
-		if err == nil {
-			a.CreatedAt = time.UnixMilli(createdAt)
-
-			if err := tx.Commit(); err != nil {
-				return Action{}, err
-			}
-
-			return a, nil
-		}
-
-		if !errors.Is(err, sql.ErrNoRows) {
-			return Action{}, err
-		}
-	}
-
-	if state != domain.StatePausedQuota &&
-		state != domain.StateResumeQueued {
-		return Action{}, fmt.Errorf(
-			"cannot queue resume for task in state %s",
-			state,
-		)
-	}
-
-	now := time.Now().UTC().UnixMilli()
-
-	result, err := tx.ExecContext(
-		ctx,
-		`INSERT INTO actions(
-			kind,
-			thread_id,
-			message,
-			status,
-			created_at,
-			updated_at
-		)
-		VALUES(
-			'resume',
-			?,
-			?,
-			'pending',
-			?,
-			?
-		)`,
-		threadID,
-		message,
-		now,
-		now,
-	)
-
-	if err != nil {
-		return Action{}, err
-	}
-
-	actionID, err := result.LastInsertId()
-	if err != nil {
-		return Action{}, err
-	}
-
-	if state == domain.StatePausedQuota {
-		if err := domain.ValidateTransition(
-			state,
-			domain.StateResumeQueued,
-		); err != nil {
-			return Action{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`UPDATE tasks
-			 SET state = ?,
-			     pause_reason = ?,
-			     updated_at = ?
-			 WHERE thread_id = ?`,
-			domain.StateResumeQueued,
-			"quota recovered",
-			now,
-			threadID,
-		)
-
-		if err != nil {
-			return Action{}, err
-		}
-
-		_, err = tx.ExecContext(
-			ctx,
-			`INSERT INTO task_events(
-				task_id,
-				from_state,
-				to_state,
-				reason,
-				created_at
-			)
-			VALUES(?,?,?,?,?)`,
-			taskID,
-			state,
-			domain.StateResumeQueued,
-			"quota recovered; resume delivery queued",
-			now,
-		)
-
-		if err != nil {
-			return Action{}, err
-		}
-	}
-
-	if err := tx.Commit(); err != nil {
-		return Action{}, err
-	}
-
-	return Action{
-		ID:        actionID,
-		Kind:      "resume",
-		ThreadID:  threadID,
-		Message:   message,
-		CreatedAt: time.UnixMilli(now),
-	}, nil
-}
-func (s *Store) CompleteAction(
-	ctx context.Context,
-	actionID int64,
-	success bool,
-	errorText string,
-) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	var (
-		kind     string
-		threadID string
-		status   string
-	)
-
-	err = tx.QueryRowContext(
-		ctx,
-		`SELECT kind, thread_id, status
-		 FROM actions
-		 WHERE id = ?`,
-		actionID,
-	).Scan(
-		&kind,
-		&threadID,
-		&status,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	if status != "pending" {
-		return tx.Commit()
-	}
-
-	newStatus := "done"
-	if !success {
-		newStatus = "failed"
-	}
-
-	now := time.Now().UTC().UnixMilli()
-
-	_, err = tx.ExecContext(
-		ctx,
-		`UPDATE actions
-		 SET status = ?,
-		     updated_at = ?
-		 WHERE id = ?`,
-		newStatus,
-		now,
-		actionID,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	if kind != "resume" {
-		return tx.Commit()
-	}
-
-	var (
-		taskID       string
-		currentState string
-	)
-
-	err = tx.QueryRowContext(
-		ctx,
-		`SELECT id, state
-		 FROM tasks
-		 WHERE thread_id = ?`,
-		threadID,
-	).Scan(
-		&taskID,
-		&currentState,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	from := domain.TaskState(currentState)
-
-	if from != domain.StateResumeQueued {
-		return tx.Commit()
-	}
-
-	target := domain.StateRunning
-	reason := "resume message delivered to Desktop thread"
-
-	if !success {
-		target = domain.StatePausedQuota
-		reason = "resume delivery failed"
-
-		if strings.TrimSpace(errorText) != "" {
-			reason += ": " + errorText
-		}
-	}
-
-	if err := domain.ValidateTransition(
-		from,
-		target,
-	); err != nil {
-		return err
-	}
-
-	_, err = tx.ExecContext(
-		ctx,
-		`UPDATE tasks
-		 SET state = ?,
-		     pause_reason = ?,
-		     updated_at = ?
-		 WHERE thread_id = ?`,
-		target,
-		func() string {
-			if success {
-				return ""
-			}
-			return "resume_delivery_failed"
-		}(),
-		now,
-		threadID,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	_, err = tx.ExecContext(
-		ctx,
-		`INSERT INTO task_events(
-			task_id,
-			from_state,
-			to_state,
-			reason,
-			created_at
-		)
-		VALUES(?,?,?,?,?)`,
-		taskID,
-		from,
-		target,
-		reason,
-		now,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	return tx.Commit()
 }
