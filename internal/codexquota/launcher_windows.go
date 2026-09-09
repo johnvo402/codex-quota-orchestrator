@@ -28,14 +28,14 @@ func launchCodex(command string) (launchedProcess, error) {
 		}
 		cmd = exec.Command(comspec)
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:     true,
+			HideWindow:    true,
 			CreationFlags: createNoWindow,
 			CmdLine:       fmt.Sprintf(`/d /s /c ""%s" app-server --stdio"`, resolved),
 		}
 	} else {
 		cmd = exec.Command(resolved, "app-server", "--stdio")
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			HideWindow:     true,
+			HideWindow:    true,
 			CreationFlags: createNoWindow,
 		}
 	}
