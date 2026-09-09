@@ -1,0 +1,11 @@
+{
+  "dataDir": "C:\\Users\\Admin\\.codex-desktop-quota-guard",
+  "listenAddr": "127.0.0.1:47631",
+  "codexCommand": "codex",
+  "pollIntervalSeconds": 60,
+  "companionPollSeconds": 5,
+  "softThresholdPercent": 10,
+  "hardThresholdPercent": 5,
+  "resumeThresholdPercent": 20,
+  "requestTimeoutSeconds": 20
+}
