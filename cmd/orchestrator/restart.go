@@ -43,11 +43,26 @@ func restartDaemon(cfg config.Config) error {
 }
 
 func requestDaemonRestart(cfg config.Config) (string, error) {
-	candidates := []string{cfg.BaseURL()}
-	defaultBase := config.Default().BaseURL()
-	if defaultBase != cfg.BaseURL() {
-		candidates = append(candidates, defaultBase)
+	var candidates []string
+	addCandidate := func(base string) {
+		if base == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if existing == base {
+				return
+			}
+		}
+		candidates = append(candidates, base)
 	}
+
+	// Persisted config can already point at the *next* port. Runtime metadata
+	// tells the CLI where the predecessor is still listening right now.
+	if runtimeInfo, err := config.LoadRuntime(cfg.DataDir); err == nil {
+		addCandidate("http://" + runtimeInfo.ListenAddr)
+	}
+	addCandidate(cfg.BaseURL())
+	addCandidate(config.Default().BaseURL())
 
 	var lastErr error
 	for _, base := range candidates {
