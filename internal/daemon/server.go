@@ -14,6 +14,7 @@ import (
 
 	"codex-desktop-quota-guard/internal/domain"
 	"codex-desktop-quota-guard/internal/store"
+	"codex-desktop-quota-guard/internal/webui"
 )
 
 type Server struct {
@@ -39,6 +40,12 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 	mux.HandleFunc("/v1/tasks/complete", s.complete)
 	mux.HandleFunc("/v1/actions", s.actions)
 	mux.HandleFunc("/v1/actions/", s.actionRoute)
+	mux.HandleFunc("/v1/dashboard", s.dashboardSummary)
+	mux.HandleFunc("/v1/projects", s.projects)
+	mux.HandleFunc("/v1/projects/", s.projectRoute)
+	mux.HandleFunc("/v1/dashboard/tasks", s.dashboardTasks)
+	mux.HandleFunc("/v1/dashboard/tasks/", s.dashboardTaskRoute)
+	mux.Handle("/", webui.Handler())
 	s.http = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	return s
 }
@@ -101,6 +108,11 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpErr(w, 500, err)
 		return
+	}
+	if strings.TrimSpace(v.Workspace) != "" {
+		if _, err := s.store.EnsureProjectForWorkspace(r.Context(), t.ID, v.Workspace); err != nil {
+			s.log.Warn("auto-link task project failed", "thread", v.ThreadID, "workspace", v.Workspace, "error", err)
+		}
 	}
 	jsonOut(w, 200, t)
 }
