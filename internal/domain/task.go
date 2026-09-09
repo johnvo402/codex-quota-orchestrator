@@ -59,11 +59,11 @@ func CanTransition(from, to TaskState) bool {
 			StateCancelled:    true,
 		},
 		StateResumeQueued: {
-			StateRunning:      true,
-			StatePausedQuota:  true,
-			StateNeedsReview:  true,
-			StateCompleted:    true,
-			StateCancelled:    true,
+			StateRunning:     true,
+			StatePausedQuota: true,
+			StateNeedsReview: true,
+			StateCompleted:   true,
+			StateCancelled:   true,
 		},
 		StateNeedsReview: {
 			StatePausedQuota: true,
