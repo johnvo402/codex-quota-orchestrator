@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -28,14 +29,11 @@ func (s *Store) GetProjectQueueMode(ctx context.Context, projectID string) (Proj
 	var modeRaw string
 	var updated int64
 	err := s.db.QueryRowContext(ctx, `SELECT mode,updated_at FROM project_queue_settings WHERE project_id=?`, projectID).Scan(&modeRaw, &updated)
-	if errors.Is(err, context.Canceled) {
-		return ProjectQueueSettings{}, err
+	if errors.Is(err, sql.ErrNoRows) {
+		// No policy row means the legacy/default behavior: AUTO.
+		return ProjectQueueSettings{ProjectID: projectID, Mode: domain.ProjectQueueAuto}, nil
 	}
 	if err != nil {
-		// No policy row means the legacy/default behavior: AUTO.
-		if strings.Contains(strings.ToLower(err.Error()), "no rows") {
-			return ProjectQueueSettings{ProjectID: projectID, Mode: domain.ProjectQueueAuto}, nil
-		}
 		return ProjectQueueSettings{}, err
 	}
 	mode := domain.ProjectQueueMode(modeRaw)
