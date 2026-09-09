@@ -169,7 +169,7 @@ func (s *Server) dashboardTaskRoute(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, 400, err)
 			return
 		}
-		t, err := s.store.UpdateTaskMetadata(r.Context(), id, v.Objective, v.ProjectID, v.Notes, v.Archived)
+		t, err := s.store.SetTaskDashboardMetadata(r.Context(), id, v.Objective, v.ProjectID, v.Notes, v.Archived)
 		if err != nil {
 			httpErr(w, statusForStoreErr(err), err)
 			return
@@ -222,11 +222,7 @@ func (s *Server) taskDashboardAction(w http.ResponseWriter, r *http.Request, id,
 			httpErr(w, http.StatusConflict, err)
 			return
 		}
-		q, _, qErr := s.service.CurrentDecision(r.Context())
 		message := "[Desktop Quota Guard] Pause requested from the local dashboard. Reach the next safe boundary, checkpoint, call task_mark_paused, then finish this turn."
-		if qErr == nil {
-			message = pauseMessage(q)
-		}
 		_, _ = s.store.EnqueueAction(r.Context(), "pause_notice", t.ThreadID, message)
 		jsonOut(w, 200, updated)
 	case "retry":
