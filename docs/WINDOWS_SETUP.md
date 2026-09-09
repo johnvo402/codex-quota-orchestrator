@@ -111,6 +111,7 @@ orch teardown
 orch config show
 orch config path
 orch config validate
+orch restart
 orch status
 orch ui
 orch list
@@ -149,6 +150,34 @@ http://127.0.0.1:47631/healthz
 ```
 
 and starts the hidden daemon if it is not already healthy.
+
+## Restarting the daemon
+
+Use either the **Restart daemon** button on the Settings page or:
+
+```powershell
+orch restart
+```
+
+The restart is graceful and does not use `taskkill`:
+
+```text
+running daemon
+   ↓
+start hidden replacement child
+   ↓
+return HTTP 202 to Settings / CLI
+   ↓
+gracefully close HTTP server
+   ↓
+replacement sees old /healthz disappear
+   ↓
+replacement loads saved config and starts
+```
+
+`orch restart` waits until the replacement health endpoint is available before reporting success. This also handles the common case where Settings changes the listen port: the Settings page moves itself to the new local address once the daemon becomes healthy there.
+
+If `companionPollSeconds` changes, fully reopen Codex Desktop after the daemon restart because `desktop-companion.exe` is a separate Codex-managed process.
 
 ## Uninstall
 
@@ -223,7 +252,11 @@ The settings page can edit:
 - sequential project queue auto-dispatch;
 - daemon listen address.
 
-The file is written through a temporary file and replaced only after the new JSON has been fully written. Saved settings currently require a daemon restart, and Codex Desktop should be reopened so the companion reloads the same shared config.
+The file is written through a temporary file and replaced only after the new JSON has been fully written. If saved values differ from the running daemon, Settings exposes **Restart daemon**. The equivalent terminal command is:
+
+```powershell
+orch restart
+```
 
 Inspect the effective config from a terminal:
 
@@ -237,6 +270,7 @@ Explicit config paths remain supported:
 
 ```powershell
 orch status --config C:\path\to\config.json
+orch restart --config C:\path\to\config.json
 orch config --config C:\path\to\config.json show
 orch daemon --config C:\path\to\config.json
 ```
