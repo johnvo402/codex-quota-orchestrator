@@ -24,7 +24,7 @@ go version
 
 ## Install
 
-From an extracted release or project root:
+Download the latest Windows x64 ZIP from GitHub Releases, extract it, then open PowerShell in the extracted folder and run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
@@ -35,7 +35,18 @@ The installer installs stable copies of the binaries here:
 
 ```text
 %LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator.exe
+%LOCALAPPDATA%\CodexQuotaGuard\bin\orch.exe
 %LOCALAPPDATA%\CodexQuotaGuard\bin\desktop-companion.exe
+```
+
+It also adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current user's PATH. Open a new terminal after installation and use the short CLI name:
+
+```powershell
+orch status
+orch ui
+orch doctor
+orch list
+orch version
 ```
 
 It then:
@@ -62,6 +73,7 @@ Fully quit Codex Desktop and reopen it after installation so the Desktop app rel
 .\scripts\install-windows.ps1 -SkipRelayInit
 .\scripts\install-windows.ps1 -SkipAgentInstructions
 .\scripts\install-windows.ps1 -SkipAutoStart
+.\scripts\install-windows.ps1 -SkipPath
 .\scripts\install-windows.ps1 -ForceBuild
 ```
 
@@ -69,13 +81,15 @@ Fully quit Codex Desktop and reopen it after installation so the Desktop app rel
 
 ## Autostart
 
-The installer creates this per-user Scheduled Task:
+There are two complementary startup paths.
+
+First, the installer creates this per-user Scheduled Task:
 
 ```text
 Codex Desktop Quota Guard
 ```
 
-Inspect it:
+It runs the daemon when you sign in to Windows. Inspect it with:
 
 ```powershell
 Get-ScheduledTask -TaskName 'Codex Desktop Quota Guard'
@@ -87,47 +101,49 @@ Start it manually if needed:
 Start-ScheduledTask -TaskName 'Codex Desktop Quota Guard'
 ```
 
-The task is configured with `MultipleInstances IgnoreNew`.
+Second, when Codex Desktop launches `desktop-companion.exe`, the companion checks `http://127.0.0.1:47631/healthz`. If the daemon is not healthy, it starts the installed sibling `orchestrator.exe daemon` automatically. This means opening Codex Desktop can recover the daemon even if the logon Scheduled Task did not start it.
 
-The daemon itself also has single-instance behavior by listen address. Starting it twice is safe when the existing process is a healthy Quota Guard daemon:
+The Scheduled Task uses `MultipleInstances IgnoreNew`, and the daemon itself also has single-instance behavior by listen address. Starting it twice is safe when the existing process is a healthy Quota Guard daemon:
 
 ```powershell
-& "$env:LOCALAPPDATA\CodexQuotaGuard\bin\orchestrator.exe" daemon
+orch daemon
 ```
 
 The second invocation reports that the daemon is already running and exits successfully.
 
 ## Everyday operation
 
-Define a convenient PowerShell variable:
+Open dashboard:
 
 ```powershell
-$oq = "$env:LOCALAPPDATA\CodexQuotaGuard\bin\orchestrator.exe"
+orch ui
 ```
 
 Overall status:
 
 ```powershell
-& $oq status
+orch status
 ```
 
 List tracked Desktop tasks:
 
 ```powershell
-& $oq list
+orch list
 ```
 
 Check account/rate-limit diagnostics:
 
 ```powershell
-& $oq doctor
+orch doctor
 ```
 
 Show installed version:
 
 ```powershell
-& $oq version
+orch version
 ```
+
+If `orch` is not recognized immediately after installation, close and reopen PowerShell/Windows Terminal so it receives the updated User PATH.
 
 `doctor` runs outside the Codex Desktop process tree, so it intentionally does not claim native Desktop-pipe reachability. Use the MCP tool `desktop_guard_status` from inside a Desktop task to validate native delivery.
 
@@ -157,14 +173,12 @@ The continuation is sent to the same Codex Desktop thread through the native Des
 
 ## Manual recovery
 
-A task can become `NEEDS_REVIEW` when a native resume send was attempted but its outcome cannot be proven. This is intentionally conservative: the guard will not automatically send another continuation because the first message may already have reached Desktop.
-
-First inspect the destination thread, then choose:
+A task can become `NEEDS_REVIEW` when a native resume send was attempted but its outcome cannot be proven. First inspect the destination thread, then choose:
 
 ```powershell
-& $oq recover --thread <threadId> --resolution retry
-& $oq recover --thread <threadId> --resolution running
-& $oq recover --thread <threadId> --resolution cancel
+orch recover --thread <threadId> --resolution retry
+orch recover --thread <threadId> --resolution running
+orch recover --thread <threadId> --resolution cancel
 ```
 
 Use `retry` only when you confirmed that the previous continuation did not arrive.
@@ -192,8 +206,6 @@ Thresholds must satisfy:
 
 Copy `config.example.json` and pass it with `--config` for manual runs, or use the supported `CDQG_*` environment variables.
 
-For the standard installed autostart configuration, the defaults are recommended unless you intentionally customize the Scheduled Task arguments/environment too.
-
 ## Upgrade
 
 For a new release, extract the new ZIP and run the installer again:
@@ -202,13 +214,13 @@ For a new release, extract the new ZIP and run the installer again:
 .\scripts\install-windows.ps1
 ```
 
-It replaces the installed binaries, refreshes the MCP registration and Scheduled Task, and preserves `~/.codex-desktop-quota-guard` state.
+It replaces the installed binaries, refreshes the MCP registration, PATH entry and Scheduled Task, and preserves `~/.codex-desktop-quota-guard` state.
 
 Restart Codex Desktop after the upgrade.
 
 ## Uninstall
 
-Remove the Scheduled Task, MCP registration, managed AGENTS block and installed binaries while keeping local task state:
+Remove the Scheduled Task, MCP registration, managed AGENTS block, User PATH entry and installed binaries while keeping local task state:
 
 ```powershell
 .\scripts\uninstall-windows.ps1
@@ -219,6 +231,8 @@ Also delete SQLite state and relay configuration:
 ```powershell
 .\scripts\uninstall-windows.ps1 -PurgeData
 ```
+
+Open a new terminal after uninstall so the removed PATH entry disappears from your shell.
 
 ## Important limitation
 
