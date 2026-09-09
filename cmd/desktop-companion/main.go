@@ -41,12 +41,17 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 		log.Warn("cannot resolve companion executable for daemon autostart", "error", err)
 		return
 	}
-	orchestrator := filepath.Join(filepath.Dir(exe), "orchestrator.exe")
-	if _, err := os.Stat(orchestrator); err != nil {
-		log.Warn("orchestrator binary not found next to desktop companion", "path", orchestrator, "error", err)
+	binDir := filepath.Dir(exe)
+	daemon := filepath.Join(binDir, "orchestrator-daemon.exe")
+	if _, err := os.Stat(daemon); err != nil {
+		daemon = filepath.Join(binDir, "orchestrator.exe")
+	}
+	if _, err := os.Stat(daemon); err != nil {
+		log.Warn("orchestrator daemon binary not found next to desktop companion", "path", daemon, "error", err)
 		return
 	}
-	cmd := exec.Command(orchestrator, "daemon")
+	cmd := exec.Command(daemon, "daemon")
+	configureBackgroundCommand(cmd)
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.Stdin = nil
