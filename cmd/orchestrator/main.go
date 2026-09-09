@@ -2,15 +2,18 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -18,9 +21,12 @@ import (
 	"codex-desktop-quota-guard/internal/config"
 	"codex-desktop-quota-guard/internal/daemon"
 	"codex-desktop-quota-guard/internal/desktop"
+	"codex-desktop-quota-guard/internal/domain"
 	"codex-desktop-quota-guard/internal/quota"
 	"codex-desktop-quota-guard/internal/store"
 )
+
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -34,17 +40,27 @@ func run() error {
 		usage()
 		return errors.New("command required")
 	}
+
 	cmd := os.Args[1]
+	if cmd == "version" {
+		fmt.Println(version)
+		return nil
+	}
+
 	fs := flag.NewFlagSet(cmd, flag.ContinueOnError)
 	cfgPath := fs.String("config", "", "config JSON")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	threadID := fs.String("thread", "", "Codex Desktop thread ID")
+	resolution := fs.String("resolution", "retry", "recovery resolution: retry, running, or cancel")
 	if err := fs.Parse(os.Args[2:]); err != nil {
 		return err
 	}
+
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
 		return err
 	}
+
 	switch cmd {
 	case "doctor":
 		return doctor(cfg, *jsonOut)
@@ -54,6 +70,10 @@ func run() error {
 		return runDaemon(cfg)
 	case "list":
 		return listTasks(cfg, *jsonOut)
+	case "status":
+		return status(cfg, *jsonOut)
+	case "recover":
+		return recoverTask(cfg, strings.TrimSpace(*threadID), strings.TrimSpace(*resolution), *jsonOut)
 	default:
 		usage()
 		return fmt.Errorf("unknown command %q", cmd)
@@ -146,6 +166,16 @@ func relayInit(cfg config.Config) error {
 }
 
 func runDaemon(cfg config.Config) error {
+	listener, err := net.Listen("tcp", cfg.ListenAddr)
+	if err != nil {
+		if daemonHealthy(cfg) {
+			fmt.Printf("Daemon already running at %s\n", cfg.BaseURL())
+			return nil
+		}
+		return fmt.Errorf("cannot listen on %s; the port may be used by another process: %w", cfg.ListenAddr, err)
+	}
+	defer listener.Close()
+
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return err
@@ -166,7 +196,7 @@ func runDaemon(cfg config.Config) error {
 
 	srv := daemon.NewServer(cfg.ListenAddr, svc, st, log)
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(listener) }()
 	log.Info("Desktop quota daemon started", "listen", cfg.ListenAddr, "db", cfg.DBPath())
 	select {
 	case <-ctx.Done():
@@ -179,6 +209,21 @@ func runDaemon(cfg config.Config) error {
 		}
 		return err
 	}
+}
+
+func daemonHealthy(cfg config.Config) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 1200*time.Millisecond)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.BaseURL()+"/healthz", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode/100 == 2
 }
 
 func listTasks(cfg config.Config, jsonOut bool) error {
@@ -194,12 +239,132 @@ func listTasks(cfg config.Config, jsonOut bool) error {
 	if jsonOut {
 		return printJSON(items)
 	}
+	if len(items) == 0 {
+		fmt.Println("No managed Desktop tasks yet.")
+		return nil
+	}
 	for _, t := range items {
 		q := "-"
 		if t.LastQuotaRemaining != nil {
 			q = fmt.Sprintf("%.0f%%", *t.LastQuotaRemaining)
 		}
 		fmt.Printf("%-18s %-6s %s  %s\n", t.State, q, t.ThreadID, trim(t.Objective, 70))
+	}
+	return nil
+}
+
+func status(cfg config.Config, jsonOut bool) error {
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	items, err := st.ListTasks(ctx)
+	if err != nil {
+		return err
+	}
+	counts := map[string]int{}
+	for _, t := range items {
+		counts[string(t.State)]++
+	}
+
+	q, qErr := st.LatestQuota(ctx)
+	relay, relayErr := desktop.LoadRelay(cfg.RelayPath())
+	out := map[string]any{
+		"version":         version,
+		"daemonRunning":   daemonHealthy(cfg),
+		"listenAddr":      cfg.ListenAddr,
+		"dataDir":         cfg.DataDir,
+		"dbPath":          cfg.DBPath(),
+		"managedTasks":    len(items),
+		"taskStateCounts": counts,
+		"relayConfigured": relayErr == nil,
+		"relay":           relay,
+	}
+	if qErr == nil {
+		out["quota"] = q
+	} else if !errors.Is(qErr, sql.ErrNoRows) {
+		out["quotaError"] = qErr.Error()
+	}
+	if jsonOut {
+		return printJSON(out)
+	}
+
+	fmt.Printf("Version:       %s\n", version)
+	fmt.Printf("Daemon:        %s (%s)\n", yesNo(daemonHealthy(cfg), "running", "stopped"), cfg.ListenAddr)
+	fmt.Printf("Data:          %s\n", cfg.DataDir)
+	if qErr == nil {
+		fmt.Printf("Quota 5h:      %s\n", windowRemaining(q.FiveHour))
+		fmt.Printf("Quota weekly:  %s\n", windowRemaining(q.Weekly))
+		fmt.Printf("Quota policy:  hard=%.0f%% soft=%.0f%% resume=%.0f%%\n", cfg.HardThresholdPercent, cfg.SoftThresholdPercent, cfg.ResumeThresholdPercent)
+	} else {
+		fmt.Println("Quota:         not sampled yet")
+	}
+	fmt.Printf("Relay:         %s\n", yesNo(relayErr == nil, "configured", "not configured"))
+	fmt.Printf("Managed tasks: %d\n", len(items))
+
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("  %-16s %d\n", k, counts[k])
+	}
+	if counts[string(domain.StateNeedsReview)] > 0 {
+		fmt.Println("Needs review: run `orchestrator list`, then `orchestrator recover --thread <id> --resolution <retry|running|cancel>`.")
+	}
+	return nil
+}
+
+func recoverTask(cfg config.Config, threadID, resolution string, jsonOut bool) error {
+	if threadID == "" {
+		return errors.New("--thread is required")
+	}
+	st, err := store.Open(cfg.DBPath())
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	ctx := context.Background()
+	t, err := st.GetByThread(ctx, threadID)
+	if err != nil {
+		return fmt.Errorf("find task: %w", err)
+	}
+	if t.State != domain.StateNeedsReview {
+		return fmt.Errorf("task %s is %s, not NEEDS_REVIEW", threadID, t.State)
+	}
+
+	var target domain.TaskState
+	var reason string
+	switch strings.ToLower(resolution) {
+	case "retry":
+		target = domain.StatePausedQuota
+		reason = "manual recovery: retry resume delivery"
+	case "running":
+		target = domain.StateRunning
+		reason = "manual recovery: confirmed Desktop thread is already running"
+	case "cancel":
+		target = domain.StateCancelled
+		reason = "manual recovery: cancelled by user"
+	default:
+		return fmt.Errorf("unknown resolution %q; use retry, running, or cancel", resolution)
+	}
+
+	updated, err := st.Transition(ctx, threadID, target, reason)
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		return printJSON(updated)
+	}
+	fmt.Printf("Recovered %s: %s -> %s\n", threadID, t.State, updated.State)
+	if strings.EqualFold(resolution, "retry") {
+		fmt.Println("The task is PAUSED_QUOTA again. When quota is resumable, the daemon will queue one new continuation delivery.")
+		fmt.Println("Use retry only after checking that the previous uncertain continuation did not already start the task.")
 	}
 	return nil
 }
@@ -219,9 +384,10 @@ func trim(s string, n int) string {
 	return s[:n-3] + "..."
 }
 
-func usage() { fmt.Println("orchestrator <doctor|relay-init|daemon|list> [--config path] [--json]") }
-
-var _ = filepath.Separator
+func usage() {
+	fmt.Println("orchestrator <doctor|relay-init|daemon|list|status|recover|version> [options]")
+	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
+}
 
 func printQuotaWindow(name string, w quota.Window) {
 	if !w.Available {
@@ -232,4 +398,18 @@ func printQuotaWindow(name string, w quota.Window) {
 	if w.ResetAt != nil {
 		fmt.Printf("%-10s %s\n", name+" reset:", w.ResetAt.Local().Format(time.RFC3339))
 	}
+}
+
+func windowRemaining(w quota.Window) string {
+	if !w.Available {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%.0f%% remaining", w.RemainingPercent)
+}
+
+func yesNo(v bool, yes, no string) string {
+	if v {
+		return yes
+	}
+	return no
 }
