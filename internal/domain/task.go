@@ -39,10 +39,38 @@ type Task struct {
 
 func CanTransition(from, to TaskState) bool {
 	allowed := map[TaskState]map[TaskState]bool{
-		StateRunning:        {StatePauseRequested: true, StateCompleted: true, StateCancelled: true},
-		StatePauseRequested: {StatePausedQuota: true, StateRunning: true, StateCompleted: true, StateCancelled: true},
-		StatePausedQuota:    {StateResumeQueued: true, StateCompleted: true, StateCancelled: true},
-		StateResumeQueued:   {StateRunning: true, StatePausedQuota: true, StateCompleted: true, StateCancelled: true},
+		StateRunning: {
+			StatePauseRequested: true,
+			StateNeedsReview:    true,
+			StateCompleted:      true,
+			StateCancelled:      true,
+		},
+		StatePauseRequested: {
+			StatePausedQuota: true,
+			StateRunning:     true,
+			StateNeedsReview: true,
+			StateCompleted:   true,
+			StateCancelled:   true,
+		},
+		StatePausedQuota: {
+			StateResumeQueued: true,
+			StateNeedsReview:  true,
+			StateCompleted:    true,
+			StateCancelled:    true,
+		},
+		StateResumeQueued: {
+			StateRunning:      true,
+			StatePausedQuota:  true,
+			StateNeedsReview:  true,
+			StateCompleted:    true,
+			StateCancelled:    true,
+		},
+		StateNeedsReview: {
+			StatePausedQuota: true,
+			StateRunning:     true,
+			StateCompleted:   true,
+			StateCancelled:   true,
+		},
 	}
 	if from == to {
 		return true
