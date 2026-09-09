@@ -45,6 +45,8 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 	mux.HandleFunc("/v1/projects/", s.projectRoute)
 	mux.HandleFunc("/v1/dashboard/tasks", s.dashboardTasks)
 	mux.HandleFunc("/v1/dashboard/tasks/", s.dashboardTaskRoute)
+	mux.HandleFunc("/v1/project-tasks", s.projectTasks)
+	mux.HandleFunc("/v1/project-tasks/", s.projectTaskRoute)
 	mux.Handle("/", webui.Handler())
 	s.http = &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	return s
@@ -166,6 +168,10 @@ func (s *Server) complete(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 409, err)
 		return
 	}
+	if err := s.store.CompleteRunningProjectTaskByThread(r.Context(), v.ThreadID); err != nil {
+		s.log.Warn("complete project queue item failed", "thread", v.ThreadID, "error", err)
+	}
+	s.service.ReconcileProjectQueues(r.Context())
 	jsonOut(w, 200, t)
 }
 
