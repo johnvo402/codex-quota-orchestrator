@@ -116,9 +116,10 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 	}
 }
 
-// ReconcileProjectQueues starts at most one queued work item per project. A
-// queue only advances after the latest managed task for that project completed
-// successfully, and only while quota is healthy enough to resume work.
+// ReconcileProjectQueues starts at most one queued work item per AUTO project.
+// MANUAL projects wait for an explicit Start action and PAUSED projects do not
+// dispatch new work. The global AutoDispatch setting remains the master switch
+// for automatic advancement.
 func (s *Service) ReconcileProjectQueues(ctx context.Context) {
 	if !s.cfg.AutoDispatch {
 		return
@@ -133,6 +134,14 @@ func (s *Service) ReconcileProjectQueues(ctx context.Context) {
 		return
 	}
 	for _, p := range projects {
+		queueSettings, err := s.store.GetProjectQueueMode(ctx, p.ID)
+		if err != nil {
+			s.log.Warn("read project queue mode failed", "project", p.ID, "error", err)
+			continue
+		}
+		if queueSettings.Mode != domain.ProjectQueueAuto {
+			continue
+		}
 		blocking, err := s.store.ProjectHasBlockingTask(ctx, p.ID)
 		if err != nil || blocking {
 			continue
