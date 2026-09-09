@@ -13,6 +13,7 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Native Windows Desktop `send_message_to_thread` delivery.
 - Crash-safe action claiming and `NEEDS_REVIEW` recovery.
 - Project/workspace grouping and sequential project task queues.
+- Per-project queue modes: `AUTO`, `MANUAL`, and `PAUSED`.
 - Embedded local dashboard with task/project management and Settings.
 - Shared persisted configuration for daemon, companion, and CLI.
 - Graceful daemon restart from Settings or `orch restart`.
@@ -163,7 +164,7 @@ Settings
 ├─ quota poll interval
 ├─ companion poll interval
 ├─ Codex request timeout
-├─ project queue auto-dispatch
+├─ global project queue auto-dispatch switch
 └─ listen address
 ```
 
@@ -196,27 +197,43 @@ orch config --config C:\path\to\config.json show
 
 ## Sequential project task queue
 
-Each project has an independent FIFO-style queue.
+Each project has an independent sequential queue and its own queue mode:
+
+```text
+AUTO    Automatically dispatch the next queued item after successful completion.
+MANUAL  Keep queued work waiting until Start now is pressed.
+PAUSED  Block all new queue dispatch for the project.
+```
+
+Switching a project to `PAUSED` does not interrupt work that is already running; it only prevents new queue items from starting. `AUTO` also requires the global `autoDispatch` setting to be enabled. Manual Start bypasses automatic-dispatch policy, but it does not bypass quota, ordering, active-task, or crash-safety checks.
 
 Example:
 
 ```text
-Project: DotRadar
+Project: DotRadar       Mode: MANUAL
 
-RUNNING  Implement SARIF output
-QUEUED   Add GitHub Actions integration
-QUEUED   Improve README examples
+COMPLETED Implement SARIF output
+QUEUED    Add GitHub Actions integration   [Start now]
+QUEUED    Improve README examples
 ```
 
-When the current task calls `task_complete`, the daemon checks quota and project state. If quota is healthy and `autoDispatch` is enabled, it dispatches the next queued task through the same crash-safe native delivery pipeline.
+Queue mode is persisted separately per project and is available through:
+
+```text
+GET   /v1/projects/{projectId}/queue-mode
+PATCH /v1/projects/{projectId}/queue-mode
+POST  /v1/project-tasks/{taskId}/start
+```
 
 Safety rules:
 
 - at most one queued item runs per project;
-- the queue advances only after `COMPLETED`;
+- only the first `QUEUED` item can be started manually;
+- automatic advancement happens only for `AUTO` projects;
+- the queue advances only after the previous managed task is `COMPLETED`;
 - `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` stop automatic advancement;
-- low quota keeps future work queued;
-- disabling `autoDispatch` leaves queued work waiting;
+- low quota keeps future work queued, including manual Start requests;
+- `PAUSED` blocks all new queue dispatch;
 - uncertain delivery becomes `NEEDS_REVIEW` instead of being blindly retried.
 
 Lifecycle:
@@ -248,6 +265,7 @@ resume:          20%
 quota poll:      60s
 companion poll:   5s
 auto dispatch:   true
+project queue:   AUTO
 ```
 
 ## Project layout
