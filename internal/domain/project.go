@@ -2,6 +2,23 @@ package domain
 
 import "time"
 
+type ProjectQueueMode string
+
+const (
+	ProjectQueueAuto   ProjectQueueMode = "AUTO"
+	ProjectQueueManual ProjectQueueMode = "MANUAL"
+	ProjectQueuePaused ProjectQueueMode = "PAUSED"
+)
+
+func (m ProjectQueueMode) Valid() bool {
+	switch m {
+	case ProjectQueueAuto, ProjectQueueManual, ProjectQueuePaused:
+		return true
+	default:
+		return false
+	}
+}
+
 type Project struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
