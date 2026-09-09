@@ -14,6 +14,7 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Crash-safe action claiming and `NEEDS_REVIEW` recovery.
 - Project/workspace grouping and sequential project task queues.
 - Per-project queue modes: `AUTO`, `MANUAL`, and `PAUSED`.
+- Atomic drag-and-drop ordering for queued project tasks.
 - Embedded local dashboard with task/project management and Settings.
 - Shared persisted configuration for daemon, companion, and CLI.
 - Graceful daemon restart from Settings or `orch restart`.
@@ -207,14 +208,29 @@ PAUSED  Block all new queue dispatch for the project.
 
 Switching a project to `PAUSED` does not interrupt work that is already running; it only prevents new queue items from starting. `AUTO` also requires the global `autoDispatch` setting to be enabled. Manual Start bypasses automatic-dispatch policy, but it does not bypass quota, ordering, active-task, or crash-safety checks.
 
+Queued items can be reordered by dragging the queue handle in the dashboard. The ↑/↓ buttons use the same atomic reorder path as a touch/keyboard fallback. QUEUED positions are always normalized to `1..N`; a partial unique SQLite index enforces that two queued items in the same project cannot own the same position.
+
+The reorder API replaces the complete queued order in one transaction:
+
+```text
+PUT /v1/project-tasks/reorder
+{
+  "projectId": "...",
+  "taskIds": ["task-c", "task-a", "task-b"]
+}
+```
+
+Every currently `QUEUED` task must appear exactly once. If the queue changed while the UI was dragging—for example because the scheduler just dispatched the first item—the stale reorder request fails with a conflict instead of mutating a different queue.
+
 Example:
 
 ```text
 Project: DotRadar       Mode: MANUAL
 
 COMPLETED Implement SARIF output
-QUEUED    Add GitHub Actions integration   [Start now]
-QUEUED    Improve README examples
+QUEUED #1 Add GitHub Actions integration   [Start now]
+QUEUED #2 Improve README examples
+QUEUED #3 Add benchmarks
 ```
 
 Queue mode is persisted separately per project and is available through:
@@ -223,6 +239,7 @@ Queue mode is persisted separately per project and is available through:
 GET   /v1/projects/{projectId}/queue-mode
 PATCH /v1/projects/{projectId}/queue-mode
 POST  /v1/project-tasks/{taskId}/start
+PUT   /v1/project-tasks/reorder
 ```
 
 Safety rules:
@@ -234,6 +251,8 @@ Safety rules:
 - `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` stop automatic advancement;
 - low quota keeps future work queued, including manual Start requests;
 - `PAUSED` blocks all new queue dispatch;
+- queued positions are normalized after reorder, cancel, delete, and dispatch;
+- stale/partial reorder requests are rejected;
 - uncertain delivery becomes `NEEDS_REVIEW` instead of being blindly retried.
 
 Lifecycle:
