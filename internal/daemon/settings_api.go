@@ -3,6 +3,7 @@ package daemon
 import (
 	"errors"
 	"net/http"
+	"os"
 	"strings"
 
 	"codex-desktop-quota-guard/internal/config"
@@ -25,12 +26,27 @@ type settingsResponse struct {
 	RestartRequired bool          `json:"restartRequired"`
 }
 
+func (s *Server) persistedSettings() (config.Config, error) {
+	path := s.service.cfg.ConfigPath()
+	cfg, err := config.Load(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return s.service.cfg, nil
+	}
+	return cfg, err
+}
+
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		persisted, err := s.persistedSettings()
+		if err != nil {
+			httpErr(w, http.StatusInternalServerError, err)
+			return
+		}
 		jsonOut(w, http.StatusOK, settingsResponse{
-			Config:     s.service.cfg,
-			ConfigPath: s.service.cfg.ConfigPath(),
+			Config:          persisted,
+			ConfigPath:      s.service.cfg.ConfigPath(),
+			RestartRequired: settingsRequireRestart(s.service.cfg, persisted),
 		})
 	case http.MethodPut:
 		s.updateSettings(w, r)
@@ -54,8 +70,12 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	current := s.service.cfg
-	next := current
+	persisted, err := s.persistedSettings()
+	if err != nil {
+		httpErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	next := persisted
 	next.ListenAddr = strings.TrimSpace(v.ListenAddr)
 	next.PollIntervalSeconds = v.PollIntervalSeconds
 	next.CompanionPollSeconds = v.CompanionPollSeconds
@@ -69,16 +89,15 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := config.Save(current.ConfigPath(), next); err != nil {
+	if err := config.Save(s.service.cfg.ConfigPath(), next); err != nil {
 		httpErr(w, http.StatusInternalServerError, err)
 		return
 	}
 
-	restartRequired := settingsRequireRestart(current, next)
 	jsonOut(w, http.StatusOK, settingsResponse{
 		Config:          next,
-		ConfigPath:      current.ConfigPath(),
-		RestartRequired: restartRequired,
+		ConfigPath:      s.service.cfg.ConfigPath(),
+		RestartRequired: settingsRequireRestart(s.service.cfg, next),
 	})
 }
 
