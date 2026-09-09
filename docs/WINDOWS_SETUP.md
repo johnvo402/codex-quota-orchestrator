@@ -83,7 +83,7 @@ State is kept separately from installed binaries:
 ~\.codex-desktop-quota-guard\
 ```
 
-This includes SQLite task history and relay state. Normal reinstall/upgrade and uninstall preserve it.
+This includes SQLite task history, relay state, and the optional shared `config.json`. Normal reinstall/upgrade and uninstall preserve it.
 
 ## Upgrade / repair
 
@@ -108,6 +108,9 @@ orch setup
 ```powershell
 orch setup
 orch teardown
+orch config show
+orch config path
+orch config validate
 orch status
 orch ui
 orch list
@@ -119,6 +122,12 @@ Dashboard:
 
 ```text
 http://127.0.0.1:47631/
+```
+
+Settings:
+
+```text
+http://127.0.0.1:47631/settings.html
 ```
 
 If `orch` is not recognized immediately after installation, open a new terminal so it receives the updated User PATH.
@@ -177,6 +186,14 @@ If a full data purge is desired, delete that directory manually after uninstalli
 
 ## Configuration
 
+Without `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and CLI all resolve the same optional configuration file:
+
+```text
+%USERPROFILE%\.codex-desktop-quota-guard\config.json
+```
+
+If that file does not exist, built-in defaults are used so existing installs continue working unchanged.
+
 Defaults:
 
 ```text
@@ -186,16 +203,45 @@ soft threshold:  10%
 resume:          20%
 quota poll:      60s
 companion poll:  5s
+request timeout: 20s
+auto dispatch:   true
 ```
 
-Manual CLI commands support `--config`, for example:
+The normal way to change these values is the dashboard **Settings** page. It persists through:
+
+```text
+GET /v1/settings
+PUT /v1/settings
+```
+
+The settings page can edit:
+
+- hard / soft / resume quota thresholds;
+- quota polling interval;
+- Desktop companion polling interval;
+- Codex request timeout;
+- sequential project queue auto-dispatch;
+- daemon listen address.
+
+The file is written through a temporary file and replaced only after the new JSON has been fully written. Saved settings currently require a daemon restart, and Codex Desktop should be reopened so the companion reloads the same shared config.
+
+Inspect the effective config from a terminal:
+
+```powershell
+orch config show
+orch config path
+orch config validate
+```
+
+Explicit config paths remain supported:
 
 ```powershell
 orch status --config C:\path\to\config.json
+orch config --config C:\path\to\config.json show
 orch daemon --config C:\path\to\config.json
 ```
 
-Background configuration currently uses defaults plus supported `CDQG_*` environment variables. Installer-level config selection is planned separately.
+Advanced/development environment overrides remain available through `CDQG_CONFIG`, `CDQG_DATA_DIR`, and `CDQG_CODEX_COMMAND`.
 
 ## Antivirus / reputation note
 
