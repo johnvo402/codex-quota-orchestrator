@@ -129,13 +129,14 @@ if (-not $SkipRelayInit) {
 }
 
 if (-not $SkipAutoStart) {
-    Write-Host '==> Registering daemon autostart task'
-    $action = New-ScheduledTaskAction -Execute $orchestrator -Argument 'daemon'
+    Write-Host '==> Registering hidden daemon autostart task'
+    $hiddenArgs = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command `"& '$orchestrator' daemon`""
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $hiddenArgs
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Runs the local Codex Desktop Quota Guard daemon.' -Force | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Description 'Runs the local Codex Desktop Quota Guard daemon in the background.' -Force | Out-Null
 
-    Write-Host '==> Starting daemon'
+    Write-Host '==> Starting daemon in background'
     Start-ScheduledTask -TaskName $taskName
     Start-Sleep -Milliseconds 800
 }
@@ -150,6 +151,7 @@ if (-not $SkipPath) {
     Write-Host "CLI alias installed: orch"
     Write-Host 'Open a new terminal if the orch command is not visible in an already-open shell.'
 }
+Write-Host 'The daemon runs hidden in the background. Use `orch status` to check it.'
 Write-Host 'Fully quit and reopen Codex Desktop so it reloads the MCP server.'
 Write-Host ''
 Write-Host 'Useful commands:'
