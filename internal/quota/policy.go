@@ -3,10 +3,10 @@ package quota
 import "time"
 
 type Policy struct {
-	SoftThreshold             float64
-	HardThreshold             float64
-	FiveHourResumeThreshold   float64
-	WeeklyResumeThreshold     float64
+	SoftThreshold           float64
+	HardThreshold           float64
+	FiveHourResumeThreshold float64
+	WeeklyResumeThreshold   float64
 
 	// ResumeThreshold is kept as a compatibility fallback for older internal
 	// callers/tests. New code should set the per-window thresholds above.
