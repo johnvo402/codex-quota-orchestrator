@@ -156,7 +156,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, errors.New("threadId required"))
 		return
 	}
-	t, err := s.store.UpsertTask(r.Context(), v.ThreadID, v.TurnID, v.Objective, v.Workspace)
+	t, err := s.store.RegisterDesktopTask(r.Context(), v.ThreadID, v.TurnID, v.Objective, v.Workspace)
 	if err != nil {
 		httpErr(w, 500, err)
 		return
