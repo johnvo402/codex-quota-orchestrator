@@ -2,7 +2,10 @@
 
 package desktop
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestDesktopStopTurnStatusClassification(t *testing.T) {
 	tests := []struct {
@@ -29,7 +32,7 @@ func TestDesktopStopTurnStatusClassification(t *testing.T) {
 }
 
 func TestDesktopStopRejectsUnknownAutomationMode(t *testing.T) {
-	attempted, err := runDesktopStopAutomation(t.Context(), "unknown")
+	attempted, err := runDesktopStopAutomation(context.Background(), "unknown")
 	if err == nil {
 		t.Fatal("expected unsupported mode error")
 	}
