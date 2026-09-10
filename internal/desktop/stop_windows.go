@@ -37,7 +37,7 @@ func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID st
 	// Navigation is safe to retry: it changes only which Desktop thread is
 	// visible. The actual Stop side effect happens only after the UI Automation
 	// script has found exactly one allow-listed button in exactly one visible
-	// Codex/ChatGPT Desktop window.
+	// Codex Desktop window.
 	if err := windowsSender.callTool(ctx, "navigate_to_codex_page", map[string]any{
 		"threadId": targetThreadID,
 	}); err != nil {
@@ -88,7 +88,7 @@ $deadline = [DateTime]::UtcNow.AddSeconds(3)
 
 while ([DateTime]::UtcNow -lt $deadline) {
   $pids = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.ProcessName -match '^(Codex|ChatGPT)$'
+    $_.ProcessName -eq 'Codex'
   } | Select-Object -ExpandProperty Id)
 
   $root = [System.Windows.Automation.AutomationElement]::RootElement
