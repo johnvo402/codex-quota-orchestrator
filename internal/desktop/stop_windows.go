@@ -13,17 +13,22 @@ import (
 )
 
 // NavigateAndStop opens the requested Codex Desktop thread through the native
-// codex_app pipe, then invokes the visible Desktop Stop button with Windows UI
-// Automation. It never sends a prompt to the thread.
+// codex_app pipe, verifies that Desktop still exposes the exact expected turn,
+// then invokes the visible Desktop Stop button with Windows UI Automation. It
+// never sends a prompt to the thread.
 //
 // attempted reports whether UI Automation reached the point where Invoke() was
 // called. Callers must treat attempted=true + err!=nil as an uncertain stop
 // outcome because Desktop may have accepted the click before the local process
 // observed the result.
-func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID string) (attempted bool, err error) {
+func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID, expectedTurnID string) (attempted bool, err error) {
 	targetThreadID = strings.TrimSpace(targetThreadID)
+	expectedTurnID = strings.TrimSpace(expectedTurnID)
 	if targetThreadID == "" {
 		return false, errors.New("target thread ID is empty")
+	}
+	if expectedTurnID == "" {
+		return false, errors.New("expected turn ID is empty")
 	}
 
 	windowsSender, ok := sender.(*windowsNativeSender)
@@ -42,6 +47,18 @@ func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID st
 		"threadId": targetThreadID,
 	}); err != nil {
 		return false, fmt.Errorf("navigate Codex Desktop to target thread: %w", err)
+	}
+
+	// Close the durable-claim -> UI-click race. A user can manually stop the old
+	// turn and start new work after the daemon claimed this action. Re-read the
+	// thread through Desktop's own native host immediately before UI Automation;
+	// never click Stop if the latest turn is not the exact turn that was queued.
+	latestTurnID, _, err := windowsSender.LatestTurn(ctx, targetThreadID)
+	if err != nil {
+		return false, fmt.Errorf("verify target Desktop turn before Stop: %w", err)
+	}
+	if strings.TrimSpace(latestTurnID) != expectedTurnID {
+		return false, fmt.Errorf("Desktop turn changed before Stop: expected %s, latest %s", expectedTurnID, strings.TrimSpace(latestTurnID))
 	}
 
 	stopCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
