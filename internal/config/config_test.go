@@ -24,12 +24,18 @@ func TestLoadMissingDefaultUsesDefaults(t *testing.T) {
 	if !cfg.AutoDispatch {
 		t.Fatal("default autoDispatch should be true")
 	}
+	if cfg.FiveHourResumeThresholdPercent != 20 {
+		t.Fatalf("default 5h resume threshold = %v, want 20", cfg.FiveHourResumeThresholdPercent)
+	}
+	if cfg.WeeklyResumeThresholdPercent != 5 {
+		t.Fatalf("default weekly resume threshold = %v, want 5", cfg.WeeklyResumeThresholdPercent)
+	}
 	if cfg.ConfigPath() != filepath.Join(cfg.DataDir, "config.json") {
 		t.Fatalf("unexpected config path: %s", cfg.ConfigPath())
 	}
 }
 
-func TestLegacyConfigWithoutAutoDispatchKeepsDefault(t *testing.T) {
+func TestLegacyConfigWithoutAutoDispatchKeepsDefaultsAndResumeFallback(t *testing.T) {
 	clearConfigEnv(t)
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := `{
@@ -40,7 +46,7 @@ func TestLegacyConfigWithoutAutoDispatchKeepsDefault(t *testing.T) {
   "companionPollSeconds": 5,
   "softThresholdPercent": 10,
   "hardThresholdPercent": 5,
-  "resumeThresholdPercent": 20,
+  "resumeThresholdPercent": 27,
   "requestTimeoutSeconds": 20
 }`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -54,8 +60,41 @@ func TestLegacyConfigWithoutAutoDispatchKeepsDefault(t *testing.T) {
 	if !cfg.AutoDispatch {
 		t.Fatal("legacy config should inherit autoDispatch=true")
 	}
+	if cfg.FiveHourResumeThresholdPercent != 27 || cfg.WeeklyResumeThresholdPercent != 27 {
+		t.Fatalf("legacy resume threshold should apply to both windows: %#v", cfg)
+	}
 	if cfg.ConfigPath() != path {
 		t.Fatalf("expected source path %s, got %s", path, cfg.ConfigPath())
+	}
+}
+
+func TestNewResumeFieldsOverrideLegacyFallbackIndependently(t *testing.T) {
+	clearConfigEnv(t)
+	path := filepath.Join(t.TempDir(), "config.json")
+	body := `{
+  "dataDir": "C:/tmp/cdqg",
+  "listenAddr": "127.0.0.1:47631",
+  "codexCommand": "codex",
+  "pollIntervalSeconds": 60,
+  "companionPollSeconds": 5,
+  "softThresholdPercent": 10,
+  "hardThresholdPercent": 5,
+  "resumeThresholdPercent": 27,
+  "fiveHourResumeThresholdPercent": 22,
+  "weeklyResumeThresholdPercent": 7,
+  "requestTimeoutSeconds": 20,
+  "autoDispatch": true
+}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.FiveHourResumeThresholdPercent != 22 || cfg.WeeklyResumeThresholdPercent != 7 {
+		t.Fatalf("new resume fields should win over legacy fallback: %#v", cfg)
 	}
 }
 
@@ -68,7 +107,8 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	cfg.ListenAddr = "127.0.0.1:48700"
 	cfg.HardThresholdPercent = 7
 	cfg.SoftThresholdPercent = 12
-	cfg.ResumeThresholdPercent = 25
+	cfg.FiveHourResumeThresholdPercent = 25
+	cfg.WeeklyResumeThresholdPercent = 8
 	cfg.PollIntervalSeconds = 30
 	cfg.CompanionPollSeconds = 3
 	cfg.RequestTimeoutSeconds = 15
@@ -84,7 +124,8 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	if loaded.ListenAddr != cfg.ListenAddr ||
 		loaded.HardThresholdPercent != cfg.HardThresholdPercent ||
 		loaded.SoftThresholdPercent != cfg.SoftThresholdPercent ||
-		loaded.ResumeThresholdPercent != cfg.ResumeThresholdPercent ||
+		loaded.FiveHourResumeThresholdPercent != cfg.FiveHourResumeThresholdPercent ||
+		loaded.WeeklyResumeThresholdPercent != cfg.WeeklyResumeThresholdPercent ||
 		loaded.PollIntervalSeconds != cfg.PollIntervalSeconds ||
 		loaded.CompanionPollSeconds != cfg.CompanionPollSeconds ||
 		loaded.RequestTimeoutSeconds != cfg.RequestTimeoutSeconds ||
@@ -93,6 +134,14 @@ func TestSaveAndLoadRoundTrip(t *testing.T) {
 	}
 	if loaded.ConfigPath() != path {
 		t.Fatalf("expected config path %s, got %s", path, loaded.ConfigPath())
+	}
+
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) == "" {
+		t.Fatal("saved config should not be empty")
 	}
 }
 
@@ -119,5 +168,16 @@ func TestValidateAcceptsLoopbackHosts(t *testing.T) {
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("expected %s to be valid: %v", addr, err)
 		}
+	}
+}
+
+func TestValidateAcceptsWeeklyResumeBelowSoftThreshold(t *testing.T) {
+	cfg := Default()
+	cfg.HardThresholdPercent = 5
+	cfg.SoftThresholdPercent = 10
+	cfg.FiveHourResumeThresholdPercent = 20
+	cfg.WeeklyResumeThresholdPercent = 5
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("weekly resume below soft should be valid: %v", err)
 	}
 }
