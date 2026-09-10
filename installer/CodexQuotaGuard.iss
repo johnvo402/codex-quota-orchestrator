@@ -54,22 +54,20 @@ Source: "..\docs\TROUBLESHOOTING.md"; DestDir: "{app}\docs"; Flags: ignoreversio
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Uninstall\CodexQuotaGuard"; Flags: deletekey dontcreatekey
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "CodexQuotaGuard"; ValueData: "{app}\bin\orchestrator-daemon.exe daemon"; Flags: uninsdeletevalue
 
 [Icons]
 Name: "{group}\Codex Quota Guard Dashboard"; Filename: "{app}\bin\orch.exe"; Parameters: "ui"
 
-[Run]
-Filename: "{app}\bin\orchestrator-daemon.exe"; Parameters: "daemon"; StatusMsg: "Starting quota daemon..."; Flags: runhidden nowait
-Filename: "{app}\bin\orch.exe"; Parameters: "ui"; Description: "Open Codex Quota Guard dashboard"; Flags: postinstall nowait skipifsilent unchecked
-
 [UninstallRun]
+Filename: "{app}\bin\orch.exe"; Parameters: "stop"; Flags: runhidden waituntilterminated; RunOnceId: "CodexQuotaGuardStop"
 Filename: "{app}\bin\orch.exe"; Parameters: "teardown"; Flags: runhidden waituntilterminated; RunOnceId: "CodexQuotaGuardTeardown"
 
 [Code]
 const
   EnvironmentKey = 'Environment';
   PathValueName = 'Path';
+  WindowsRunKey = 'Software\Microsoft\Windows\CurrentVersion\Run';
+  WindowsRunValueName = 'CodexQuotaGuard';
 
 function NormalizePathEntry(Value: string): string;
 begin
@@ -148,6 +146,53 @@ begin
   RegWriteExpandStringValue(HKCU, EnvironmentKey, PathValueName, NewPath);
 end;
 
+procedure RemoveLegacyDaemonAutostart;
+begin
+  RegDeleteValue(HKCU, WindowsRunKey, WindowsRunValueName);
+end;
+
+procedure StopInstalledDaemon;
+var
+  OrchPath: string;
+  ResultCode: Integer;
+  Ok: Boolean;
+begin
+  OrchPath := ExpandConstant('{app}\bin\orch.exe');
+  if FileExists(OrchPath) then
+  begin
+    Ok := Exec(
+      OrchPath,
+      'stop',
+      ExpandConstant('{app}\bin'),
+      SW_HIDE,
+      ewWaitUntilTerminated,
+      ResultCode
+    );
+    if Ok and (ResultCode = 0) then
+      Exit;
+  end;
+
+  { v0.1.3 and older do not have `orch stop`. This one-time compatibility
+    fallback matches the manual Task Manager workaround users previously had
+    to perform. Newer versions always take the graceful path above. }
+  Exec(
+    ExpandConstant('{sys}\taskkill.exe'),
+    '/IM orchestrator-daemon.exe /T /F',
+    '',
+    SW_HIDE,
+    ewWaitUntilTerminated,
+    ResultCode
+  );
+  Sleep(500);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  RemoveLegacyDaemonAutostart;
+  StopInstalledDaemon;
+  Result := '';
+end;
+
 procedure ConfigureCodexIntegration;
 var
   ResultCode: Integer;
@@ -175,6 +220,7 @@ procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    RemoveLegacyDaemonAutostart;
     AddToUserPath(ExpandConstant('{app}\bin'));
     ConfigureCodexIntegration;
   end;
@@ -183,5 +229,8 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
+  begin
+    RemoveLegacyDaemonAutostart;
     RemoveFromUserPath(ExpandConstant('{app}\bin'));
+  end;
 end;
