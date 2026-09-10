@@ -23,6 +23,7 @@ import (
 	"codex-desktop-quota-guard/internal/config"
 	"codex-desktop-quota-guard/internal/daemon"
 	"codex-desktop-quota-guard/internal/desktop"
+	"codex-desktop-quota-guard/internal/diagnostics"
 	"codex-desktop-quota-guard/internal/domain"
 	"codex-desktop-quota-guard/internal/observability"
 	"codex-desktop-quota-guard/internal/quota"
@@ -97,57 +98,22 @@ func run() error {
 }
 
 func doctor(cfg config.Config, jsonOut bool) error {
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	c := codexquota.New(cfg.CodexCommand, cfg.RequestTimeout(), log)
-	if err := c.Start(ctx); err != nil {
-		return err
-	}
-	defer c.Close()
-	acct, err := c.ReadAccount(ctx)
-	if err != nil {
-		return err
-	}
-	rates, err := c.ReadRateLimits(ctx)
-	if err != nil {
-		return err
-	}
-	policy := quota.Policy{SoftThreshold: cfg.SoftThresholdPercent, HardThreshold: cfg.HardThresholdPercent, ResumeThreshold: cfg.ResumeThresholdPercent}
-	snap := quota.FromRateLimits(rates, policy)
-	relay, relayErr := desktop.LoadRelay(cfg.RelayPath())
-	out := map[string]any{
-		"account":         acct.Account,
-		"quota":           snap,
-		"rawRateLimits":   rates,
-		"relay":           relay,
-		"relayConfigured": relayErr == nil,
-		"desktopNativeCheck": map[string]any{
-			"status": "not_checked",
-			"reason": "doctor runs outside Codex Desktop; use desktop_guard_status from a Desktop task",
-		},
-	}
+	report := diagnostics.Run(ctx, cfg)
 	if jsonOut {
-		return printJSON(out)
-	}
-	if acct.Account == nil {
-		fmt.Println("Account: signed out")
+		if err := printJSON(report); err != nil {
+			return err
+		}
 	} else {
-		fmt.Printf("Account: %s (%s)\n", acct.Account.Email, acct.Account.PlanType)
+		fmt.Printf("System diagnostics: %s\n\n", report.Overall)
+		for _, check := range report.Checks {
+			fmt.Printf("%-8s %-24s %s\n", check.Status, check.Name, check.Summary)
+		}
 	}
-	printQuotaWindow("5h", snap.FiveHour)
-	printQuotaWindow("Weekly", snap.Weekly)
-	fmt.Printf("Effective: %.0f%% remaining\n", snap.RemainingPercent)
-	if snap.PauseReason != "" {
-		fmt.Println("Pause reason:", snap.PauseReason)
+	if report.Overall == diagnostics.StatusFail {
+		return errors.New("one or more diagnostic checks failed")
 	}
-	if relayErr != nil {
-		fmt.Println("Relay: not initialized (run: orchestrator relay-init)")
-	} else {
-		fmt.Println("Relay thread:", relay.ExecutorThreadID)
-	}
-	fmt.Println("Desktop native delivery: not tested here")
-	fmt.Println("Use desktop_guard_status inside Codex Desktop.")
 	return nil
 }
 
@@ -443,6 +409,7 @@ func usage() {
 	fmt.Println("  config [show|path|validate]              Inspect shared configuration")
 	fmt.Println("  restart                                 Gracefully restart the quota daemon")
 	fmt.Println("  logs [--follow] [--tail N] [--level L]  View daemon and companion logs")
+	fmt.Println("  doctor                                  Run system diagnostics")
 	fmt.Println("  ui                                      Open local dashboard")
 	fmt.Println("  recover --thread <threadId> --resolution <retry|running|cancel>")
 }

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"codex-desktop-quota-guard/internal/config"
+	"codex-desktop-quota-guard/internal/diagnostics"
 	"codex-desktop-quota-guard/internal/domain"
 	"codex-desktop-quota-guard/internal/store"
 	"codex-desktop-quota-guard/internal/webui"
@@ -36,6 +37,7 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 	mux.HandleFunc("/healthz", s.health)
 	mux.HandleFunc("/v1/quota", s.quota)
 	mux.HandleFunc("/v1/settings", s.settings)
+	mux.HandleFunc("/v1/diagnostics", s.diagnostics)
 	mux.HandleFunc("/v1/system/restart", s.systemRestart)
 	mux.HandleFunc("/v1/tasks", s.tasks)
 	mux.HandleFunc("/v1/tasks/register", s.register)
@@ -95,6 +97,20 @@ func (s *Server) quota(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonOut(w, 200, map[string]any{"quota": q, "decision": d})
+}
+
+func (s *Server) diagnostics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Header.Get("X-CDQG-Control") != "diagnostics" {
+		httpErr(w, http.StatusForbidden, errors.New("diagnostics control header required"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 40*time.Second)
+	defer cancel()
+	jsonOut(w, http.StatusOK, diagnostics.Run(ctx, s.service.cfg))
 }
 
 func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {

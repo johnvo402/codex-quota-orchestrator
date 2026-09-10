@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>System Diagnostics</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#e5e7eb;background:#0b1020}*{box-sizing:border-box}body{margin:0;min-height:100vh;background:linear-gradient(180deg,#0b1020,#111827 45%,#0b1020)}.wrap{max-width:1080px;margin:auto;padding:24px}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px}.title{font-size:28px;font-weight:800}.muted{color:#94a3b8}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid #31415f;background:#172036;color:#e5e7eb;padding:9px 12px;border-radius:10px;cursor:pointer;font-weight:650;text-decoration:none}.btn.primary{background:#2563eb;border-color:#2563eb}.btn:disabled{opacity:.5;cursor:not-allowed}.summary{display:flex;align-items:center;gap:12px;background:#111827;border:1px solid #263249;border-radius:16px;padding:16px;margin-bottom:16px}.overall{font-size:13px;font-weight:850;padding:7px 11px;border-radius:999px}.PASS{background:#123b2a;color:#86efac}.WARN,.UNKNOWN{background:#4a3515;color:#fde68a}.FAIL{background:#4a1f27;color:#fda4af}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.card{background:#111827;border:1px solid #263249;border-radius:14px;padding:15px}.head{display:flex;align-items:center;justify-content:space-between;gap:10px}.name{font-weight:780}.status{font-size:11px;font-weight:850;padding:5px 8px;border-radius:999px}.summary-text{margin-top:9px;font-size:13px;line-height:1.5}.details{margin-top:10px;font:12px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;color:#94a3b8;white-space:pre-wrap;word-break:break-word}.footer{margin-top:16px;background:#0e1628;border:1px solid #263249;border-radius:14px;padding:15px}.cmd{font:13px ui-monospace,SFMono-Regular,Consolas,monospace;background:#090f1d;border:1px solid #263249;border-radius:9px;padding:10px;margin-top:8px;color:#cbd5e1}.loading{padding:45px;text-align:center;color:#94a3b8}@media(max-width:760px){.grid{grid-template-columns:1fr}.top{align-items:flex-start;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div><div class="title">System Diagnostics</div><div class="muted">Daemon, Codex, MCP, quota, database and Desktop integration health</div></div>
+    <div class="actions"><button id="refresh" class="btn primary" onclick="runDiagnostics()">Run diagnostics</button><a class="btn" href="/settings.html">Settings</a><a class="btn" href="/">Dashboard</a></div>
+  </div>
+  <div id="summary" class="summary"><span class="muted">Diagnostics have not run yet.</span></div>
+  <div id="checks" class="grid"><div class="loading">Loading…</div></div>
+  <div class="footer">
+    <strong>Runtime logs</strong>
+    <div class="muted" style="margin-top:6px">Use the CLI while reproducing a background issue:</div>
+    <div class="cmd">orch logs --follow</div>
+    <div class="cmd">orch logs --level error --tail 100</div>
+  </div>
+</div>
+<script>
+const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+async function runDiagnostics(){const b=document.getElementById('refresh');b.disabled=true;b.textContent='Running…';document.getElementById('checks').innerHTML='<div class="loading">Checking Codex and local services…</div>';try{const r=await fetch('/v1/diagnostics',{headers:{'X-CDQG-Control':'diagnostics'}});if(!r.ok)throw new Error(await r.text());const report=await r.json();render(report)}catch(e){document.getElementById('summary').innerHTML=`<span class="overall FAIL">FAIL</span><span>${esc(e.message)}</span>`;document.getElementById('checks').innerHTML=''}finally{b.disabled=false;b.textContent='Run diagnostics'}}
+function render(r){const at=r.generatedAt?new Date(r.generatedAt).toLocaleString():'-';document.getElementById('summary').innerHTML=`<span class="overall ${esc(r.overall)}">${esc(r.overall)}</span><div><strong>System health</strong><div class="muted">Last run: ${esc(at)}</div></div>`;document.getElementById('checks').innerHTML=(r.checks||[]).map(c=>`<div class="card"><div class="head"><div class="name">${esc(c.name)}</div><span class="status ${esc(c.status)}">${esc(c.status)}</span></div><div class="summary-text">${esc(c.summary)}</div>${c.details&&Object.keys(c.details).length?`<div class="details">${esc(JSON.stringify(c.details,null,2))}</div>`:''}</div>`).join('')||'<div class="loading">No checks returned.</div>'}
+runDiagnostics();
+</script>
+</body>
+</html>
