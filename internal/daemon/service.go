@@ -42,12 +42,16 @@ func NewService(cfg config.Config, st *store.Store, log *slog.Logger) *Service {
 }
 
 func (s *Service) Recover(ctx context.Context) error {
-	recovered, err := s.store.RecoverStaleDeliveries(ctx, time.Now().UTC().Add(-60*time.Second))
+	// At process startup, every action still marked delivering belonged to the
+	// previous daemon process. Its Desktop outcome is unknowable, even if it was
+	// claimed only milliseconds before the crash. Recover it immediately instead
+	// of waiting for the periodic 60-second stale-delivery window.
+	recovered, err := s.store.RecoverInterruptedDeliveries(ctx)
 	if err != nil {
-		return fmt.Errorf("recover stale Desktop deliveries: %w", err)
+		return fmt.Errorf("recover interrupted Desktop deliveries: %w", err)
 	}
 	if recovered > 0 {
-		s.log.Warn("uncertain Desktop deliveries recovered", "count", recovered)
+		s.log.Warn("interrupted Desktop deliveries moved to NEEDS_REVIEW", "count", recovered)
 	}
 	return nil
 }
