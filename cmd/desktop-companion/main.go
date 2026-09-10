@@ -17,6 +17,12 @@ import (
 	"codex-desktop-quota-guard/internal/observability"
 )
 
+const (
+	systemControlHeader  = "X-CDQG-Control"
+	companionIDHeader    = "X-CDQG-Companion-ID"
+	companionStateHeader = "X-CDQG-Companion-State"
+)
+
 func main() {
 	cfg, err := config.Load("")
 	if err != nil {
@@ -35,13 +41,82 @@ func main() {
 	log.Info("Desktop companion started")
 	ensureDaemon(cfg, log)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer cancel()
-	if err := mcpserver.New(cfg, log).Run(ctx, os.Stdin, os.Stdout); err != nil {
-		log.Error("Desktop companion failed", "error", err)
-		fmt.Fprintln(os.Stderr, "desktop companion:", err)
+	instanceID := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	go maintainDaemonLifecycle(ctx, cfg, instanceID, log)
+
+	runErr := mcpserver.New(cfg, log).Run(ctx, os.Stdin, os.Stdout)
+	cancel()
+
+	disconnectCtx, disconnectCancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	if err := signalCompanion(disconnectCtx, cfg, instanceID, "disconnect"); err != nil && daemonHealthy(cfg) {
+		log.Warn("failed to release Desktop companion lease", "error", err)
+	}
+	disconnectCancel()
+
+	if runErr != nil {
+		log.Error("Desktop companion failed", "error", runErr)
+		fmt.Fprintln(os.Stderr, "desktop companion:", runErr)
 		os.Exit(1)
 	}
 	log.Info("Desktop companion stopped")
+}
+
+func maintainDaemonLifecycle(ctx context.Context, cfg config.Config, instanceID string, log *slog.Logger) {
+	heartbeat := func() {
+		hbCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		err := signalCompanion(hbCtx, cfg, instanceID, "heartbeat")
+		cancel()
+		if err == nil || ctx.Err() != nil {
+			return
+		}
+
+		// If the daemon disappeared unexpectedly while Codex is still open,
+		// restore it and re-register this companion lease.
+		log.Warn("quota daemon heartbeat failed", "error", err)
+		ensureDaemon(cfg, log)
+		retryCtx, retryCancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		if retryErr := signalCompanion(retryCtx, cfg, instanceID, "heartbeat"); retryErr != nil && ctx.Err() == nil {
+			log.Warn("quota daemon heartbeat retry failed", "error", retryErr)
+		}
+		retryCancel()
+	}
+
+	heartbeat()
+	interval := cfg.CompanionPollInterval()
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			heartbeat()
+		}
+	}
+}
+
+func signalCompanion(ctx context.Context, cfg config.Config, instanceID, state string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.BaseURL()+"/v1/system/restart", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set(systemControlHeader, "companion")
+	req.Header.Set(companionIDHeader, instanceID)
+	req.Header.Set(companionStateHeader, state)
+
+	client := &http.Client{Timeout: 1200 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("companion lifecycle endpoint returned %s", resp.Status)
+	}
+	return nil
 }
 
 func ensureDaemon(cfg config.Config, log *slog.Logger) {

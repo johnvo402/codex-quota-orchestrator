@@ -77,6 +77,8 @@ func run() error {
 		return configCommand(cfg, fs.Args(), *jsonOut)
 	case "restart":
 		return restartDaemon(cfg)
+	case "stop":
+		return stopDaemon(cfg)
 	case "doctor":
 		return doctor(cfg, *jsonOut)
 	case "relay-init":
@@ -403,11 +405,12 @@ func trim(s string, n int) string {
 }
 
 func usage() {
-	fmt.Println("orchestrator <setup|teardown|config|restart|logs|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
+	fmt.Println("orchestrator <setup|teardown|config|restart|stop|logs|doctor|relay-init|daemon|ui|list|status|recover|version> [options]")
 	fmt.Println("  setup                                   Configure Codex MCP, AGENTS.md, and relay")
 	fmt.Println("  teardown                                Remove Codex MCP and managed AGENTS.md block")
 	fmt.Println("  config [show|path|validate]              Inspect shared configuration")
 	fmt.Println("  restart                                 Gracefully restart the quota daemon")
+	fmt.Println("  stop                                    Gracefully stop the quota daemon")
 	fmt.Println("  logs [--follow] [--tail N] [--level L]  View daemon and companion logs")
 	fmt.Println("  doctor                                  Run system diagnostics")
 	fmt.Println("  ui                                      Open local dashboard")

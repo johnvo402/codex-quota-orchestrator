@@ -38,6 +38,71 @@ func TestSystemRestartRequiresControlHeader(t *testing.T) {
 	}
 }
 
+func TestSystemShutdownAccepted(t *testing.T) {
+	s := &Server{
+		service: &Service{cfg: config.Default()},
+		log:     slog.Default(),
+		http:    &http.Server{},
+	}
+	r := httptest.NewRequest(http.MethodPost, "/v1/system/restart", nil)
+	r.Header.Set(systemControlHeader, "shutdown")
+	w := httptest.NewRecorder()
+
+	s.systemRestart(w, r)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCompanionLifecycleTracksMultipleInstances(t *testing.T) {
+	s := &Server{
+		service: &Service{cfg: config.Default()},
+		log:     slog.Default(),
+		http:    &http.Server{},
+	}
+
+	heartbeat := func(id string) {
+		r := httptest.NewRequest(http.MethodPost, "/v1/system/restart", nil)
+		r.Header.Set(systemControlHeader, "companion")
+		r.Header.Set(companionIDHeader, id)
+		r.Header.Set(companionStateHeader, "heartbeat")
+		w := httptest.NewRecorder()
+		s.systemRestart(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("heartbeat %s: expected 200, got %d: %s", id, w.Code, w.Body.String())
+		}
+	}
+	disconnect := func(id string) {
+		r := httptest.NewRequest(http.MethodPost, "/v1/system/restart", nil)
+		r.Header.Set(systemControlHeader, "companion")
+		r.Header.Set(companionIDHeader, id)
+		r.Header.Set(companionStateHeader, "disconnect")
+		w := httptest.NewRecorder()
+		s.systemRestart(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("disconnect %s: expected 200, got %d: %s", id, w.Code, w.Body.String())
+		}
+	}
+
+	heartbeat("companion-a")
+	heartbeat("companion-b")
+	registry := registryForServer(s)
+	registry.mu.Lock()
+	if len(registry.leases) != 2 {
+		registry.mu.Unlock()
+		t.Fatalf("expected 2 companion leases, got %d", len(registry.leases))
+	}
+	registry.mu.Unlock()
+
+	disconnect("companion-a")
+	registry.mu.Lock()
+	if len(registry.leases) != 1 {
+		registry.mu.Unlock()
+		t.Fatalf("expected one remaining companion lease, got %d", len(registry.leases))
+	}
+	registry.mu.Unlock()
+}
+
 func TestSystemRestartLaunchesReplacementWithoutMissingConfigArg(t *testing.T) {
 	t.Setenv("CDQG_DATA_DIR", t.TempDir())
 	var gotConfig, gotWaitURL string
