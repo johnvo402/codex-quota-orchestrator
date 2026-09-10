@@ -315,7 +315,7 @@ func status(cfg config.Config, jsonOut bool) error {
 	if qErr == nil {
 		fmt.Printf("Quota 5h:      %s\n", windowRemaining(q.FiveHour))
 		fmt.Printf("Quota weekly:  %s\n", windowRemaining(q.Weekly))
-		fmt.Printf("Quota policy:  hard=%.0f%% soft=%.0f%% resume=%.0f%%\n", cfg.HardThresholdPercent, cfg.SoftThresholdPercent, cfg.ResumeThresholdPercent)
+		fmt.Printf("Quota policy:  hard=%.0f%% soft=%.0f%% resume5h=%.0f%% resumeWeekly=%.0f%%\n", cfg.HardThresholdPercent, cfg.SoftThresholdPercent, cfg.FiveHourResumeThresholdPercent, cfg.WeeklyResumeThresholdPercent)
 	} else {
 		fmt.Println("Quota:         not sampled yet")
 	}

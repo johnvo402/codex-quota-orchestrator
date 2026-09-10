@@ -10,14 +10,16 @@ import (
 )
 
 type settingsUpdate struct {
-	ListenAddr             string  `json:"listenAddr"`
-	PollIntervalSeconds    int     `json:"pollIntervalSeconds"`
-	CompanionPollSeconds   int     `json:"companionPollSeconds"`
-	SoftThresholdPercent   float64 `json:"softThresholdPercent"`
-	HardThresholdPercent   float64 `json:"hardThresholdPercent"`
-	ResumeThresholdPercent float64 `json:"resumeThresholdPercent"`
-	RequestTimeoutSeconds  int     `json:"requestTimeoutSeconds"`
-	AutoDispatch           *bool   `json:"autoDispatch"`
+	ListenAddr                     string   `json:"listenAddr"`
+	PollIntervalSeconds            int      `json:"pollIntervalSeconds"`
+	CompanionPollSeconds           int      `json:"companionPollSeconds"`
+	SoftThresholdPercent           float64  `json:"softThresholdPercent"`
+	HardThresholdPercent           float64  `json:"hardThresholdPercent"`
+	FiveHourResumeThresholdPercent *float64 `json:"fiveHourResumeThresholdPercent"`
+	WeeklyResumeThresholdPercent   *float64 `json:"weeklyResumeThresholdPercent"`
+	ResumeThresholdPercent         *float64 `json:"resumeThresholdPercent"`
+	RequestTimeoutSeconds          int      `json:"requestTimeoutSeconds"`
+	AutoDispatch                   *bool    `json:"autoDispatch"`
 }
 
 type settingsResponse struct {
@@ -81,7 +83,18 @@ func (s *Server) updateSettings(w http.ResponseWriter, r *http.Request) {
 	next.CompanionPollSeconds = v.CompanionPollSeconds
 	next.SoftThresholdPercent = v.SoftThresholdPercent
 	next.HardThresholdPercent = v.HardThresholdPercent
-	next.ResumeThresholdPercent = v.ResumeThresholdPercent
+	if v.FiveHourResumeThresholdPercent != nil {
+		next.FiveHourResumeThresholdPercent = *v.FiveHourResumeThresholdPercent
+	} else if v.ResumeThresholdPercent != nil {
+		// Backward compatibility for callers using the pre-split API.
+		next.FiveHourResumeThresholdPercent = *v.ResumeThresholdPercent
+	}
+	if v.WeeklyResumeThresholdPercent != nil {
+		next.WeeklyResumeThresholdPercent = *v.WeeklyResumeThresholdPercent
+	} else if v.ResumeThresholdPercent != nil {
+		// Backward compatibility for callers using the pre-split API.
+		next.WeeklyResumeThresholdPercent = *v.ResumeThresholdPercent
+	}
 	next.RequestTimeoutSeconds = v.RequestTimeoutSeconds
 	next.AutoDispatch = *v.AutoDispatch
 
@@ -107,7 +120,8 @@ func settingsRequireRestart(a, b config.Config) bool {
 		a.CompanionPollSeconds != b.CompanionPollSeconds ||
 		a.SoftThresholdPercent != b.SoftThresholdPercent ||
 		a.HardThresholdPercent != b.HardThresholdPercent ||
-		a.ResumeThresholdPercent != b.ResumeThresholdPercent ||
+		a.FiveHourResumeThresholdPercent != b.FiveHourResumeThresholdPercent ||
+		a.WeeklyResumeThresholdPercent != b.WeeklyResumeThresholdPercent ||
 		a.RequestTimeoutSeconds != b.RequestTimeoutSeconds ||
 		a.AutoDispatch != b.AutoDispatch
 }

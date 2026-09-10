@@ -146,3 +146,58 @@ func TestFiveHourCanPauseIndependently(
 		)
 	}
 }
+
+func TestWeeklySixteenPercentCanResumeWithFivePercentWeeklyThreshold(t *testing.T) {
+	p := Policy{
+		SoftThreshold:           10,
+		HardThreshold:           5,
+		FiveHourResumeThreshold: 20,
+		WeeklyResumeThreshold:   5,
+	}
+	r := codexquota.RateLimitsResponse{
+		RateLimits: codexquota.RateLimitBucket{
+			Primary: &codexquota.RateLimitWindow{
+				UsedPercent:        0,
+				WindowDurationMins: FiveHourWindowMinutes,
+			},
+			Secondary: &codexquota.RateLimitWindow{
+				UsedPercent:        84,
+				WindowDurationMins: WeeklyWindowMinutes,
+			},
+		},
+	}
+
+	got := FromRateLimits(r, p)
+	if got.SoftPause {
+		t.Fatal("weekly 16% should be above the 10% soft pause threshold")
+	}
+	if !got.CanResume {
+		t.Fatal("5h=100% and weekly=16% should resume with thresholds 20%/5%")
+	}
+}
+
+func TestWeeklySixteenPercentDoesNotResumeWithTwentyPercentWeeklyThreshold(t *testing.T) {
+	p := Policy{
+		SoftThreshold:           10,
+		HardThreshold:           5,
+		FiveHourResumeThreshold: 20,
+		WeeklyResumeThreshold:   20,
+	}
+	r := codexquota.RateLimitsResponse{
+		RateLimits: codexquota.RateLimitBucket{
+			Primary: &codexquota.RateLimitWindow{
+				UsedPercent:        0,
+				WindowDurationMins: FiveHourWindowMinutes,
+			},
+			Secondary: &codexquota.RateLimitWindow{
+				UsedPercent:        84,
+				WindowDurationMins: WeeklyWindowMinutes,
+			},
+		},
+	}
+
+	got := FromRateLimits(r, p)
+	if got.CanResume {
+		t.Fatal("weekly=16% should not resume when weekly threshold is 20%")
+	}
+}

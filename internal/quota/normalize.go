@@ -117,16 +117,19 @@ func FromRateLimits(
 		weeklyHard || weeklySoft,
 	)
 
-	// Resume chỉ khi TẤT CẢ window có mặt đều khỏe.
+	// Resume only when every available window meets its own resume threshold.
+	// Soft/hard pause is evaluated separately by the caller, so a threshold
+	// below SoftThreshold simply means that the soft threshold is the effective
+	// lower bound for that window.
 	canResume := seen && !blocked
 
 	if snapshot.FiveHour.Available &&
-		snapshot.FiveHour.RemainingPercent < p.ResumeThreshold {
+		snapshot.FiveHour.RemainingPercent < p.fiveHourResumeThreshold() {
 		canResume = false
 	}
 
 	if snapshot.Weekly.Available &&
-		snapshot.Weekly.RemainingPercent < p.ResumeThreshold {
+		snapshot.Weekly.RemainingPercent < p.weeklyResumeThreshold() {
 		canResume = false
 	}
 

@@ -6,7 +6,7 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 
 ## Current capabilities
 
-- Separate 5-hour and weekly Codex quota windows.
+- Separate 5-hour and weekly Codex quota windows with independent resume thresholds.
 - Local Go daemon with SQLite persistence.
 - Codex Desktop MCP companion captures the current Desktop `threadId`.
 - Cooperative pause/checkpoint/resume flow.
@@ -122,6 +122,7 @@ orch config show
 orch config path
 orch config validate
 orch restart
+orch logs
 orch status
 orch ui
 orch list
@@ -147,6 +148,12 @@ Settings:
 http://127.0.0.1:47631/settings.html
 ```
 
+Diagnostics:
+
+```text
+http://127.0.0.1:47631/diagnostics.html
+```
+
 ## Shared configuration
 
 With no explicit `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and `orch` CLI all resolve the same optional file:
@@ -161,13 +168,40 @@ The dashboard exposes:
 
 ```text
 Settings
-├─ hard / soft / resume thresholds
+├─ hard / soft pause thresholds
+├─ 5h resume threshold
+├─ weekly resume threshold
 ├─ quota poll interval
 ├─ companion poll interval
 ├─ Codex request timeout
 ├─ global project queue auto-dispatch switch
 └─ listen address
 ```
+
+Hard and soft thresholds still apply to both quota windows. Resume additionally requires every available window to meet its own resume threshold. A per-window resume threshold below the soft threshold does not bypass pause: that window must first be above the soft threshold, then satisfy its own resume threshold.
+
+For example, with the defaults:
+
+```text
+5h remaining:        100%
+weekly remaining:     16%
+hard:                  5%
+soft:                  10%
+5h resume:             20%
+weekly resume:          5%
+
+result: resumable
+```
+
+A legacy config containing only:
+
+```json
+{
+  "resumeThresholdPercent": 20
+}
+```
+
+is still accepted. Until the Settings page is saved with the new fields, that legacy value is used as the resume threshold for both 5h and weekly windows. Newly saved configs use `fiveHourResumeThresholdPercent` and `weeklyResumeThresholdPercent` instead.
 
 Settings are validated and persisted through:
 
@@ -275,14 +309,38 @@ orch recover --thread <threadId> --resolution cancel
 
 Use `retry` only when you confirmed the previous continuation did not arrive.
 
+## Runtime logs and diagnostics
+
+Structured JSON Lines logs are written under:
+
+```text
+~\.codex-desktop-quota-guard\logs\
+├─ daemon.log
+└─ companion.log
+```
+
+Use:
+
+```powershell
+orch logs
+orch logs --tail 200
+orch logs --level error
+orch logs --component daemon
+orch logs --follow
+orch doctor
+```
+
+The diagnostics dashboard checks configuration, daemon/runtime metadata, SQLite and queue integrity, companion installation, Codex CLI, MCP registration, and quota-provider access. The native Desktop pipe remains a Desktop-process check and is reported as `UNKNOWN` from the standalone daemon/CLI diagnostics path.
+
 ## Default policy
 
 ```text
-hard threshold:  5%
-soft threshold: 10%
-resume:          20%
-quota poll:      60s
-companion poll:   5s
+hard threshold:    5%
+soft threshold:   10%
+5h resume:        20%
+weekly resume:     5%
+quota poll:       60s
+companion poll:    5s
 auto dispatch:   true
 project queue:   AUTO
 ```
@@ -300,11 +358,13 @@ internal/
   config/             shared config resolution, validation, persistence
   daemon/             monitor + API + queue scheduler
   desktop/            native Desktop delivery
+  diagnostics/        doctor/dashboard health checks
   mcpserver/          MCP tools + action delivery
+  observability/      structured runtime logging and log reader
   store/              SQLite persistence
   domain/             task/project/queue models
   quota/              policy
-  webui/              embedded dashboard, queue, and Settings UI
+  webui/              embedded dashboard, queue, diagnostics, and Settings UI
 .github/workflows/
   ci.yml
   release.yml
@@ -316,6 +376,8 @@ Legacy PowerShell scripts may remain in the source tree for development/migratio
 
 - `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, background startup, configuration, and uninstall.
 - `docs/TROUBLESHOOTING.md` — daemon, native delivery, and recovery diagnostics.
+- `docs/DIAGNOSTICS.md` — doctor v2 and system diagnostics dashboard.
+- `docs/LOGGING.md` — structured daemon/companion logs and `orch logs`.
 - `docs/ARCHITECTURE.md` — Desktop-first architecture.
 
 ## Important limitation

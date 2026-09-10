@@ -3,8 +3,13 @@ package quota
 import "time"
 
 type Policy struct {
-	SoftThreshold   float64
-	HardThreshold   float64
+	SoftThreshold           float64
+	HardThreshold           float64
+	FiveHourResumeThreshold float64
+	WeeklyResumeThreshold   float64
+
+	// ResumeThreshold is kept as a compatibility fallback for older internal
+	// callers/tests. New code should set the per-window thresholds above.
 	ResumeThreshold float64
 }
 
@@ -74,4 +79,18 @@ func (p Policy) Decide(s Snapshot) Decision {
 
 func (p Policy) CanResume(s Snapshot) bool {
 	return s.CanResume
+}
+
+func (p Policy) fiveHourResumeThreshold() float64 {
+	if p.FiveHourResumeThreshold != 0 || p.ResumeThreshold == 0 {
+		return p.FiveHourResumeThreshold
+	}
+	return p.ResumeThreshold
+}
+
+func (p Policy) weeklyResumeThreshold() float64 {
+	if p.WeeklyResumeThreshold != 0 || p.ResumeThreshold == 0 {
+		return p.WeeklyResumeThreshold
+	}
+	return p.ResumeThreshold
 }
