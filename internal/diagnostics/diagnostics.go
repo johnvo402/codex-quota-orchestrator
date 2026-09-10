@@ -199,7 +199,7 @@ func checkCompanion() Check {
 }
 
 func checkCodexCLI(cfg config.Config) (string, Check) {
-	path, err := exec.LookPath(cfg.CodexCommand)
+	path, err := codexquota.ResolveCommand(cfg.CodexCommand)
 	if err != nil {
 		return "", Check{ID: "codex_cli", Name: "Codex CLI", Status: StatusFail, Summary: err.Error(), Details: map[string]any{"command": cfg.CodexCommand}}
 	}

@@ -7,10 +7,18 @@ import (
 	"os/exec"
 )
 
-func launchCodex(command string) (launchedProcess, error) {
+func ResolveCommand(command string) (string, error) {
 	resolved, err := exec.LookPath(command)
 	if err != nil {
-		return launchedProcess{}, fmt.Errorf("find Codex executable %q: %w", command, err)
+		return "", fmt.Errorf("find Codex executable %q: %w", command, err)
+	}
+	return resolved, nil
+}
+
+func launchCodex(command string) (launchedProcess, error) {
+	resolved, err := ResolveCommand(command)
+	if err != nil {
+		return launchedProcess{}, err
 	}
 	cmd := exec.Command(resolved, "app-server", "--stdio")
 	stdin, err := cmd.StdinPipe()
