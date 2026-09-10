@@ -52,7 +52,7 @@ func (s *Server) dashboardRecovery(w http.ResponseWriter, r *http.Request) {
 			Reason:      task.PauseReason,
 			UpdatedAt:   task.UpdatedAt,
 		}
-		if action, err := s.store.LatestActionInfo(r.Context(), task.ThreadID, "resume"); err == nil {
+		if action, err := s.store.LatestRecoveryActionInfo(r.Context(), task.ThreadID); err == nil {
 			item.Action = &action
 		} else if !errors.Is(err, sql.ErrNoRows) {
 			httpErr(w, http.StatusInternalServerError, err)
