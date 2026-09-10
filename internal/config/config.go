@@ -13,17 +13,21 @@ import (
 )
 
 type Config struct {
-	DataDir                          string  `json:"dataDir"`
-	ListenAddr                       string  `json:"listenAddr"`
-	CodexCommand                     string  `json:"codexCommand"`
-	PollIntervalSeconds              int     `json:"pollIntervalSeconds"`
-	CompanionPollSeconds             int     `json:"companionPollSeconds"`
-	SoftThresholdPercent             float64 `json:"softThresholdPercent"`
-	HardThresholdPercent             float64 `json:"hardThresholdPercent"`
-	FiveHourResumeThresholdPercent   float64 `json:"fiveHourResumeThresholdPercent"`
-	WeeklyResumeThresholdPercent     float64 `json:"weeklyResumeThresholdPercent"`
-	RequestTimeoutSeconds            int     `json:"requestTimeoutSeconds"`
-	AutoDispatch                     bool    `json:"autoDispatch"`
+	DataDir                        string  `json:"dataDir"`
+	ListenAddr                     string  `json:"listenAddr"`
+	CodexCommand                   string  `json:"codexCommand"`
+	PollIntervalSeconds            int     `json:"pollIntervalSeconds"`
+	CompanionPollSeconds           int     `json:"companionPollSeconds"`
+	SoftThresholdPercent           float64 `json:"softThresholdPercent"`
+	HardThresholdPercent           float64 `json:"hardThresholdPercent"`
+	FiveHourResumeThresholdPercent float64 `json:"fiveHourResumeThresholdPercent"`
+	WeeklyResumeThresholdPercent   float64 `json:"weeklyResumeThresholdPercent"`
+	RequestTimeoutSeconds          int     `json:"requestTimeoutSeconds"`
+	AutoDispatch                   bool    `json:"autoDispatch"`
+
+	// Deprecated internal compatibility alias. It mirrors the 5h resume
+	// threshold and is intentionally omitted from newly saved JSON.
+	ResumeThresholdPercent float64 `json:"-"`
 
 	sourcePath string
 }
@@ -42,6 +46,7 @@ func Default() Config {
 		WeeklyResumeThresholdPercent:   5,
 		RequestTimeoutSeconds:          20,
 		AutoDispatch:                   true,
+		ResumeThresholdPercent:         20,
 	}
 }
 
@@ -109,6 +114,7 @@ func Load(path string) (Config, error) {
 	if v := os.Getenv("CDQG_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
+	cfg.ResumeThresholdPercent = cfg.FiveHourResumeThresholdPercent
 	cfg.sourcePath = resolved
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
