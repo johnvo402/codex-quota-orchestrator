@@ -7,6 +7,6 @@ import (
 	"errors"
 )
 
-func NavigateAndStop(context.Context, NativeSender, string) (bool, error) {
+func NavigateAndStop(context.Context, NativeSender, string, string) (bool, error) {
 	return false, errors.New("Codex Desktop Stop automation is Windows-only")
 }
