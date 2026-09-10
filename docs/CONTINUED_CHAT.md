@@ -13,3 +13,5 @@ When `desktop_task_register` reaches the daemon:
 Re-arming a terminal thread clears checkpoint/pending/test/quota fields from the previous execution and records a `terminal -> RUNNING` task event with reason `new Desktop turn registered after terminal task`.
 
 This keeps the existing one-row-per-thread storage model and preserves the same thread for native resume. The task event timeline records the lifecycle boundary. A future history model can snapshot completed objectives separately without changing Desktop delivery identity.
+
+Registration is MCP-driven: the guard cannot observe an arbitrary new user message until Codex calls one of its MCP tools. `desktop_task_register` remains the intended entry point near the beginning of substantial work. Once it is called for a new turn, a previously completed thread is no longer stuck in `COMPLETED`.
