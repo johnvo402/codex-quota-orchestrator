@@ -11,7 +11,7 @@ import (
 func (s *Server) deliverClaimedAction(ctx context.Context, sender desktop.NativeSender, action store.Action) {
 	if action.Kind == store.ActionKindStop {
 		stopCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		attempted, err := desktop.NavigateAndStop(stopCtx, sender, action.ThreadID)
+		attempted, err := desktop.NavigateAndStop(stopCtx, sender, action.ThreadID, action.Message)
 		cancel()
 		if err != nil {
 			if attempted {
@@ -22,9 +22,9 @@ func (s *Server) deliverClaimedAction(ctx context.Context, sender desktop.Native
 				return
 			}
 
-			// Navigation/UI discovery failed before InvokePattern was called. The
-			// external Stop side effect definitely did not happen, so a confirmed
-			// failed action is more useful than NEEDS_REVIEW.
+			// Navigation, exact-turn verification, or UI discovery failed before
+			// InvokePattern was called. The external Stop side effect definitely did
+			// not happen, so a confirmed failed action is more useful than review.
 			s.log.Warn("Codex Desktop Stop failed before invocation", "action", action.ID, "thread", action.ThreadID, "error", err)
 			if ackErr := s.daemon.ack(ctx, action.ID, false, err.Error()); ackErr != nil {
 				s.log.Error("record failed Desktop Stop action failed", "action", action.ID, "error", ackErr)
@@ -39,7 +39,7 @@ func (s *Server) deliverClaimedAction(ctx context.Context, sender desktop.Native
 			s.log.Error("Desktop Stop invoked but durable ack failed; leaving delivery for recovery", "action", action.ID, "thread", action.ThreadID, "error", err)
 			return
 		}
-		s.log.Info("Codex Desktop Stop invoked", "action", action.ID, "thread", action.ThreadID)
+		s.log.Info("Codex Desktop Stop invoked", "action", action.ID, "thread", action.ThreadID, "turn", action.Message)
 		return
 	}
 
