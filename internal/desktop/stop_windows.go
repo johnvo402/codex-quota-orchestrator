@@ -36,7 +36,8 @@ func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID st
 
 	// Navigation is safe to retry: it changes only which Desktop thread is
 	// visible. The actual Stop side effect happens only after the UI Automation
-	// script has found exactly one allow-listed button.
+	// script has found exactly one allow-listed button in exactly one visible
+	// Codex/ChatGPT Desktop window.
 	if err := windowsSender.callTool(ctx, "navigate_to_codex_page", map[string]any{
 		"threadId": targetThreadID,
 	}); err != nil {
@@ -59,7 +60,7 @@ func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID st
 		return false, errors.New("Codex Desktop Stop button was not found after navigation")
 	}
 	if strings.Contains(text, "CDQG_STOP_AMBIGUOUS") {
-		return false, errors.New("multiple Codex Desktop Stop buttons matched; refusing to click")
+		return false, errors.New("Desktop Stop target is ambiguous; refusing to click")
 	}
 	if stopCtx.Err() != nil {
 		if attempted {
@@ -74,7 +75,9 @@ func NavigateAndStop(ctx context.Context, sender NativeSender, targetThreadID st
 }
 
 // Keep the selector deliberately narrow. A translated/renamed button should
-// fail closed instead of risking a click on an unrelated control.
+// fail closed instead of risking a click on an unrelated control. Multiple
+// visible Codex windows are also rejected because UI Automation cannot prove
+// which window owns the requested thread id.
 const desktopStopPowerShell = `
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient
@@ -88,26 +91,37 @@ while ([DateTime]::UtcNow -lt $deadline) {
     $_.ProcessName -match '^(Codex|ChatGPT)$'
   } | Select-Object -ExpandProperty Id)
 
-  $matches = @()
+  $root = [System.Windows.Automation.AutomationElement]::RootElement
+  $top = @()
   if ($pids.Count -gt 0) {
-    $root = [System.Windows.Automation.AutomationElement]::RootElement
     $windows = $root.FindAll(
       [System.Windows.Automation.TreeScope]::Children,
       [System.Windows.Automation.Condition]::TrueCondition
     )
-
     foreach ($window in $windows) {
       if ($pids -notcontains $window.Current.ProcessId) { continue }
-      $buttons = $window.FindAll(
-        [System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.Condition]::TrueCondition
-      )
-      foreach ($button in $buttons) {
-        if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
-        if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen) { continue }
-        $name = [string]$button.Current.Name
-        if ($allowed -contains $name) { $matches += $button }
-      }
+      if ($window.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window) { continue }
+      if ($window.Current.IsOffscreen) { continue }
+      $top += $window
+    }
+  }
+
+  if ($top.Count -gt 1) {
+    Write-Output 'CDQG_STOP_AMBIGUOUS'
+    exit 4
+  }
+
+  $matches = @()
+  if ($top.Count -eq 1) {
+    $buttons = $top[0].FindAll(
+      [System.Windows.Automation.TreeScope]::Descendants,
+      [System.Windows.Automation.Condition]::TrueCondition
+    )
+    foreach ($button in $buttons) {
+      if ($button.Current.ControlType -ne [System.Windows.Automation.ControlType]::Button) { continue }
+      if (-not $button.Current.IsEnabled -or $button.Current.IsOffscreen) { continue }
+      $name = [string]$button.Current.Name
+      if ($allowed -contains $name) { $matches += $button }
     }
   }
 
