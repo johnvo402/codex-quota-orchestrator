@@ -91,6 +91,30 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 			}
 			jsonOut(w, http.StatusOK, item)
 			return
+		case "retry":
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			item, err := s.service.RetryProjectQueueItem(r.Context(), id)
+			if err != nil {
+				httpErr(w, queueStatus(err), err)
+				return
+			}
+			jsonOut(w, http.StatusOK, item)
+			return
+		case "running":
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			item, err := s.service.ConfirmProjectQueueItemRunning(r.Context(), id)
+			if err != nil {
+				httpErr(w, queueStatus(err), err)
+				return
+			}
+			jsonOut(w, http.StatusOK, item)
+			return
 		default:
 			http.NotFound(w, r)
 			return
