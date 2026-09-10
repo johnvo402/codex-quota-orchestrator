@@ -20,7 +20,7 @@ import (
 //
 // Re-registering the same terminal turn is intentionally idempotent and does
 // not reopen it. NEEDS_REVIEW and quota-paused states are also never bypassed
-// by registration.
+// or overwritten by registration.
 func (s *Store) RegisterDesktopTask(ctx context.Context, threadID, turnID, objective, workspace string) (domain.Task, error) {
 	threadID = strings.TrimSpace(threadID)
 	turnID = strings.TrimSpace(turnID)
@@ -102,8 +102,19 @@ VALUES(?,?,?,?,?)
 		return s.GetByThread(ctx, threadID)
 	}
 
-	// Existing non-terminal behavior: refresh metadata but never use register as
-	// a way to escape quota pause or NEEDS_REVIEW.
+	// Registration must not replace the identity/checkpoint of work that is
+	// paused, queued for resume, or awaiting manual review. A user can type a
+	// new message while one of those states is active, but that is not evidence
+	// that the guarded work was safely resolved.
+	if currentState != domain.StateRunning {
+		if err := tx.Commit(); err != nil {
+			return domain.Task{}, err
+		}
+		return s.GetByThread(ctx, threadID)
+	}
+
+	// While RUNNING, repeated register calls simply refresh the current turn's
+	// metadata and remain idempotent with respect to task state.
 	nextTurnID := currentTurnID
 	if turnID != "" {
 		nextTurnID = turnID
