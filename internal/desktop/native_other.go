@@ -17,6 +17,9 @@ func (unsupportedNativeSender) Description() string {
 func (unsupportedNativeSender) SendMessage(context.Context, string, string) error {
 	return errors.New("Desktop native relay is Windows-only in this MVP")
 }
+func (unsupportedNativeSender) LatestTurn(context.Context, string) (string, string, error) {
+	return "", "", errors.New("Desktop native turn snapshot is Windows-only in this MVP")
+}
 func (unsupportedNativeSender) Diagnostics() NativeDiagnostics {
 	return NativeDiagnostics{
 		Available: false,
