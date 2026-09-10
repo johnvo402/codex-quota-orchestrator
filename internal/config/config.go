@@ -13,16 +13,17 @@ import (
 )
 
 type Config struct {
-	DataDir                string  `json:"dataDir"`
-	ListenAddr             string  `json:"listenAddr"`
-	CodexCommand           string  `json:"codexCommand"`
-	PollIntervalSeconds    int     `json:"pollIntervalSeconds"`
-	CompanionPollSeconds   int     `json:"companionPollSeconds"`
-	SoftThresholdPercent   float64 `json:"softThresholdPercent"`
-	HardThresholdPercent   float64 `json:"hardThresholdPercent"`
-	ResumeThresholdPercent float64 `json:"resumeThresholdPercent"`
-	RequestTimeoutSeconds  int     `json:"requestTimeoutSeconds"`
-	AutoDispatch           bool    `json:"autoDispatch"`
+	DataDir                          string  `json:"dataDir"`
+	ListenAddr                       string  `json:"listenAddr"`
+	CodexCommand                     string  `json:"codexCommand"`
+	PollIntervalSeconds              int     `json:"pollIntervalSeconds"`
+	CompanionPollSeconds             int     `json:"companionPollSeconds"`
+	SoftThresholdPercent             float64 `json:"softThresholdPercent"`
+	HardThresholdPercent             float64 `json:"hardThresholdPercent"`
+	FiveHourResumeThresholdPercent   float64 `json:"fiveHourResumeThresholdPercent"`
+	WeeklyResumeThresholdPercent     float64 `json:"weeklyResumeThresholdPercent"`
+	RequestTimeoutSeconds            int     `json:"requestTimeoutSeconds"`
+	AutoDispatch                     bool    `json:"autoDispatch"`
 
 	sourcePath string
 }
@@ -30,16 +31,17 @@ type Config struct {
 func Default() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		DataDir:                filepath.Join(home, ".codex-desktop-quota-guard"),
-		ListenAddr:             "127.0.0.1:47631",
-		CodexCommand:           "codex",
-		PollIntervalSeconds:    60,
-		CompanionPollSeconds:   5,
-		SoftThresholdPercent:   10,
-		HardThresholdPercent:   5,
-		ResumeThresholdPercent: 20,
-		RequestTimeoutSeconds:  20,
-		AutoDispatch:           true,
+		DataDir:                        filepath.Join(home, ".codex-desktop-quota-guard"),
+		ListenAddr:                     "127.0.0.1:47631",
+		CodexCommand:                   "codex",
+		PollIntervalSeconds:            60,
+		CompanionPollSeconds:           5,
+		SoftThresholdPercent:           10,
+		HardThresholdPercent:           5,
+		FiveHourResumeThresholdPercent: 20,
+		WeeklyResumeThresholdPercent:   5,
+		RequestTimeoutSeconds:          20,
+		AutoDispatch:                   true,
 	}
 }
 
@@ -71,8 +73,28 @@ func Load(path string) (Config, error) {
 	b, err := os.ReadFile(resolved)
 	switch {
 	case err == nil:
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(b, &raw); err != nil {
+			return Config{}, fmt.Errorf("parse config %s: %w", resolved, err)
+		}
 		if err := json.Unmarshal(b, &cfg); err != nil {
 			return Config{}, fmt.Errorf("parse config %s: %w", resolved, err)
+		}
+		// Before per-window resume thresholds existed, one
+		// resumeThresholdPercent value controlled both quota windows. Preserve
+		// that behavior for existing config files until Settings is saved with
+		// the new fields.
+		if legacyRaw, ok := raw["resumeThresholdPercent"]; ok {
+			var legacy float64
+			if err := json.Unmarshal(legacyRaw, &legacy); err != nil {
+				return Config{}, fmt.Errorf("parse legacy resumeThresholdPercent in %s: %w", resolved, err)
+			}
+			if _, present := raw["fiveHourResumeThresholdPercent"]; !present {
+				cfg.FiveHourResumeThresholdPercent = legacy
+			}
+			if _, present := raw["weeklyResumeThresholdPercent"]; !present {
+				cfg.WeeklyResumeThresholdPercent = legacy
+			}
 		}
 	case errors.Is(err, os.ErrNotExist) && !explicit:
 		// The shared default file is optional. Existing installations continue
@@ -157,8 +179,12 @@ func (c Config) Validate() error {
 	if c.RequestTimeoutSeconds < 1 {
 		return errors.New("requestTimeoutSeconds must be >= 1")
 	}
-	if c.HardThresholdPercent < 0 || c.SoftThresholdPercent <= c.HardThresholdPercent || c.ResumeThresholdPercent <= c.SoftThresholdPercent || c.ResumeThresholdPercent > 100 {
-		return errors.New("thresholds must satisfy 0 <= hard < soft < resume <= 100")
+	if c.HardThresholdPercent < 0 || c.SoftThresholdPercent <= c.HardThresholdPercent || c.SoftThresholdPercent > 100 {
+		return errors.New("pause thresholds must satisfy 0 <= hard < soft <= 100")
+	}
+	if c.FiveHourResumeThresholdPercent < 0 || c.FiveHourResumeThresholdPercent > 100 ||
+		c.WeeklyResumeThresholdPercent < 0 || c.WeeklyResumeThresholdPercent > 100 {
+		return errors.New("resume thresholds must each be between 0 and 100")
 	}
 	return nil
 }
