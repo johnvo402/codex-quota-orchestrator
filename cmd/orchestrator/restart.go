@@ -47,9 +47,9 @@ func restartDaemon(cfg config.Config) error {
 func stopDaemon(cfg config.Config) error {
 	base, err := requestDaemonShutdown(cfg)
 	if errors.Is(err, errLegacyShutdownUnsupported) {
-		// v0.1.3 and older expose /v1/system/restart but reject the new shutdown
+		// v0.1.4 and older expose /v1/system/restart but reject the new shutdown
 		// control value. Use runtime metadata for a one-time compatibility stop so
-		// the v0.1.4 installer can replace the locked daemon binary. Future
+		// the v0.1.5 installer can replace the locked daemon binary. Future
 		// upgrades use the graceful path above.
 		runtimeInfo, runtimeErr := config.LoadRuntime(cfg.DataDir)
 		if runtimeErr != nil {
