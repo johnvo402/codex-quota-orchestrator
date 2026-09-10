@@ -28,7 +28,17 @@ func NewService(cfg config.Config, st *store.Store, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{cfg: cfg, store: st, log: log, policy: quota.Policy{SoftThreshold: cfg.SoftThresholdPercent, HardThreshold: cfg.HardThresholdPercent, ResumeThreshold: cfg.ResumeThresholdPercent}}
+	return &Service{
+		cfg:   cfg,
+		store: st,
+		log:   log,
+		policy: quota.Policy{
+			SoftThreshold:           cfg.SoftThresholdPercent,
+			HardThreshold:           cfg.HardThresholdPercent,
+			FiveHourResumeThreshold: cfg.FiveHourResumeThresholdPercent,
+			WeeklyResumeThreshold:   cfg.WeeklyResumeThresholdPercent,
+		},
+	}
 }
 
 func (s *Service) Recover(ctx context.Context) error {
