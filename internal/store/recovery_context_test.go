@@ -24,7 +24,7 @@ func TestProjectTaskRecoveryRetryAndConfirmRunning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.SetTaskProject(ctx, managed.ID, project.ID); err != nil {
+	if _, err := st.EnsureProjectForWorkspace(ctx, managed.ID, project.Path); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.Transition(ctx, managed.ThreadID, domain.StateCompleted, "done"); err != nil {
