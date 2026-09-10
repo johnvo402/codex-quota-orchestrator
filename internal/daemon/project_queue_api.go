@@ -72,7 +72,7 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			item, err := s.store.CancelProjectTask(r.Context(), id)
+			item, err := s.store.SafeCancelProjectTask(r.Context(), id)
 			if err != nil {
 				httpErr(w, http.StatusConflict, err)
 				return
