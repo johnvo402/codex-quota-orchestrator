@@ -148,6 +148,10 @@ func (s *Server) dashboardTaskRoute(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if path == "recovery" {
+		s.dashboardRecovery(w, r)
+		return
+	}
 	parts := strings.Split(path, "/")
 	id := parts[0]
 	if len(parts) == 2 {
@@ -214,7 +218,7 @@ func (s *Server) taskDashboardAction(w http.ResponseWriter, r *http.Request, id,
 		}
 		jsonOut(w, 200, items)
 	case "cancel":
-		updated, err := s.store.Transition(r.Context(), t.ThreadID, domain.StateCancelled, "cancelled from dashboard")
+		updated, err := s.store.SafeCancelManagedTask(r.Context(), t.ThreadID)
 		if err != nil {
 			httpErr(w, http.StatusConflict, err)
 			return
@@ -276,11 +280,17 @@ func (s *Server) dashboardSummary(w http.ResponseWriter, r *http.Request) {
 	for _, t := range tasks {
 		counts[string(t.State)]++
 	}
+	queueReview, err := s.store.ListProjectTasksNeedingReview(r.Context())
+	if err != nil {
+		httpErr(w, 500, err)
+		return
+	}
 	q, d, qErr := s.service.CurrentDecision(r.Context())
 	out := map[string]any{
-		"projects": len(projects),
-		"tasks":    len(tasks),
-		"states":   counts,
+		"projects":    len(projects),
+		"tasks":       len(tasks),
+		"states":      counts,
+		"reviewCount": counts[string(domain.StateNeedsReview)] + len(queueReview),
 	}
 	if qErr == nil {
 		out["quota"] = q

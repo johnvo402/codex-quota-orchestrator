@@ -72,7 +72,7 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			item, err := s.store.CancelProjectTask(r.Context(), id)
+			item, err := s.store.SafeCancelProjectTask(r.Context(), id)
 			if err != nil {
 				httpErr(w, http.StatusConflict, err)
 				return
@@ -85,6 +85,30 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			item, err := s.service.StartProjectQueueItem(r.Context(), id)
+			if err != nil {
+				httpErr(w, queueStatus(err), err)
+				return
+			}
+			jsonOut(w, http.StatusOK, item)
+			return
+		case "retry":
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			item, err := s.service.RetryProjectQueueItem(r.Context(), id)
+			if err != nil {
+				httpErr(w, queueStatus(err), err)
+				return
+			}
+			jsonOut(w, http.StatusOK, item)
+			return
+		case "running":
+			if r.Method != http.MethodPost {
+				w.WriteHeader(http.StatusMethodNotAllowed)
+				return
+			}
+			item, err := s.service.ConfirmProjectQueueItemRunning(r.Context(), id)
 			if err != nil {
 				httpErr(w, queueStatus(err), err)
 				return

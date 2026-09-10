@@ -60,20 +60,26 @@ func NewServer(addr string, svc *Service, st *store.Store, log *slog.Logger) *Se
 
 func (s *Server) ListenAndServe() error {
 	s.publishRuntime()
+	defer s.cleanupRuntime()
 	return s.http.ListenAndServe()
 }
 
 func (s *Server) Serve(listener net.Listener) error {
 	s.publishRuntime()
+	defer s.cleanupRuntime()
 	return s.http.Serve(listener)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {
 	err := s.http.Shutdown(ctx)
+	s.cleanupRuntime()
+	return err
+}
+
+func (s *Server) cleanupRuntime() {
 	if cleanupErr := config.RemoveRuntimeIfPID(s.service.cfg.DataDir, os.Getpid()); cleanupErr != nil {
 		s.log.Warn("remove daemon runtime discovery failed", "error", cleanupErr)
 	}
-	return err
 }
 
 func (s *Server) publishRuntime() {
@@ -150,7 +156,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		httpErr(w, 400, errors.New("threadId required"))
 		return
 	}
-	t, err := s.store.UpsertTask(r.Context(), v.ThreadID, v.TurnID, v.Objective, v.Workspace)
+	t, err := s.store.RegisterDesktopTask(r.Context(), v.ThreadID, v.TurnID, v.Objective, v.Workspace)
 	if err != nil {
 		httpErr(w, 500, err)
 		return
