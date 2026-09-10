@@ -10,12 +10,14 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"codex-desktop-quota-guard/internal/codexquota"
 )
 
 const bootstrapCreateNoWindow = 0x08000000
 
 func runCodexQuiet(args ...string) (string, error) {
-	resolved, err := exec.LookPath("codex")
+	resolved, err := codexquota.ResolveCommand("codex")
 	if err != nil {
 		return "", fmt.Errorf("find Codex CLI: %w", err)
 	}
