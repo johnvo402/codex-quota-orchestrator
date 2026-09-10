@@ -217,6 +217,18 @@ func (s *Server) taskDashboardAction(w http.ResponseWriter, r *http.Request, id,
 			return
 		}
 		jsonOut(w, 200, items)
+	case "stop":
+		stop, err := s.store.QueueStopSafe(r.Context(), t.ThreadID)
+		if err != nil {
+			httpErr(w, http.StatusConflict, err)
+			return
+		}
+		jsonOut(w, http.StatusAccepted, map[string]any{
+			"ok":       true,
+			"actionId": stop.ID,
+			"threadId": t.ThreadID,
+			"turnId":   t.TurnID,
+		})
 	case "cancel":
 		updated, err := s.store.SafeCancelManagedTask(r.Context(), t.ThreadID)
 		if err != nil {
