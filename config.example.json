@@ -6,7 +6,8 @@
   "companionPollSeconds": 5,
   "softThresholdPercent": 10,
   "hardThresholdPercent": 5,
-  "resumeThresholdPercent": 20,
+  "fiveHourResumeThresholdPercent": 20,
+  "weeklyResumeThresholdPercent": 5,
   "requestTimeoutSeconds": 20,
   "autoDispatch": true
 }
