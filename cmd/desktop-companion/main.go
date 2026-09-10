@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	systemControlHeader   = "X-CDQG-Control"
-	companionIDHeader     = "X-CDQG-Companion-ID"
-	companionStateHeader  = "X-CDQG-Companion-State"
+	systemControlHeader  = "X-CDQG-Control"
+	companionIDHeader    = "X-CDQG-Companion-ID"
+	companionStateHeader = "X-CDQG-Companion-State"
 )
 
 func main() {
