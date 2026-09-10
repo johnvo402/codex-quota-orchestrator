@@ -15,12 +15,14 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Project/workspace grouping and sequential project task queues.
 - Per-project queue modes: `AUTO`, `MANUAL`, and `PAUSED`.
 - Atomic drag-and-drop ordering for queued project tasks.
-- Embedded local dashboard with task/project management and Settings.
+- Embedded local dashboard with task/project management, Settings, diagnostics, and Desktop Stop.
 - Shared persisted configuration for daemon, companion, and CLI.
 - Graceful daemon restart from Settings or `orch restart`.
+- Graceful daemon shutdown with `orch stop`.
 - `orch` CLI installed on the current user's PATH.
 - Inno Setup based Windows installer/uninstaller.
-- Hidden Windows background daemon with per-user autostart.
+- Desktop-bound daemon lifecycle: the companion starts the daemon on demand and the daemon exits after the last active companion disconnects or its lease expires.
+- Windows Desktop Stop with exact `threadId` / `turnId` checks and backend interruption verification.
 
 ## Install on Windows
 
@@ -30,13 +32,13 @@ Prerequisites:
 - Codex Desktop
 - Codex CLI installed and logged in
 
-Download the latest installer directly from GitHub Releases:
+Download the latest installer from GitHub Releases:
 
 ```text
 CodexQuotaGuardSetup-vX.Y.Z.exe
 ```
 
-Double-click it and complete the normal Windows setup wizard. No PowerShell script or execution-policy change is required.
+Double-click it and complete the normal Windows setup wizard. No PowerShell installer or execution-policy change is required.
 
 Setup installs under:
 
@@ -52,13 +54,13 @@ Setup installs under:
    └─ desktop-companion.exe
 ```
 
-The installer itself only handles normal application installation concerns: files, User PATH, Windows autostart, shortcuts, and uninstall registration. Codex-specific bootstrap is delegated to:
+The installer handles normal application installation concerns such as files, User PATH, shortcuts, update compatibility, and uninstall registration. Codex-specific bootstrap is delegated to:
 
 ```powershell
 orch setup
 ```
 
-During installation Inno Setup runs that command to register the MCP companion, manage the Quota Guard block in `~/.codex/AGENTS.md`, and initialize the relay when needed.
+During installation that command registers the MCP companion, manages the Quota Guard block in `~/.codex/AGENTS.md`, and initializes the relay when needed.
 
 After installation, fully quit and reopen Codex Desktop once, then open a new terminal and run:
 
@@ -67,19 +69,59 @@ orch status
 orch ui
 ```
 
+## Daemon lifecycle
+
+The daemon no longer runs permanently from the Windows Run key.
+
+Normal lifecycle:
+
+```text
+Open Codex Desktop
+   ↓
+desktop-companion.exe starts
+   ↓
+companion starts orchestrator-daemon.exe if needed
+   ↓
+companion heartbeat keeps the daemon alive
+   ↓
+Full Quit Codex Desktop
+   ↓
+companion disconnects / lease expires
+   ↓
+orchestrator-daemon.exe gracefully exits
+```
+
+Multiple companion instances are supported. Closing one companion does not stop the daemon while another valid lease remains active.
+
+A clean companion exit releases its lease immediately. If Codex or the companion crashes, the lease expires after the heartbeat grace period and the daemon shuts down automatically.
+
 ## Upgrade / repair
 
-Download the newer `CodexQuotaGuardSetup-vX.Y.Z.exe` and run it again.
+Download the newer installer and run it again:
 
-Inno Setup uses the Windows Restart Manager for files that are currently in use rather than force-killing processes itself. Runtime state remains outside the install directory and is preserved:
+```text
+CodexQuotaGuardSetup-vX.Y.Z.exe
+```
+
+Before replacing installed binaries, the installer stops the currently installed daemon so `orchestrator-daemon.exe` is not left locked in Task Manager.
+
+Current releases use the graceful CLI path:
+
+```powershell
+orch stop
+```
+
+For upgrades from releases that predate `orch stop`, the installer contains a narrowly scoped compatibility fallback that verifies the recorded daemon runtime identity before terminating that legacy process.
+
+Runtime state is outside the installation directory and is preserved across upgrade/repair:
 
 ```text
 ~\.codex-desktop-quota-guard\
 ```
 
-including SQLite task history, relay state, and the shared `config.json` when it exists.
+including SQLite task history, relay state, logs, and the shared `config.json` when it exists.
 
-If Codex integration ever needs to be repaired manually:
+If Codex integration needs repair later:
 
 ```powershell
 orch setup
@@ -97,13 +139,13 @@ Settings
 → Uninstall
 ```
 
-or run the Inno Setup uninstaller inside:
+or run:
 
 ```text
 %LOCALAPPDATA%\CodexQuotaGuard\unins000.exe
 ```
 
-Before removing application files, the uninstaller runs:
+The uninstaller stops the daemon before removing application files and runs:
 
 ```powershell
 orch teardown
@@ -122,6 +164,7 @@ orch config show
 orch config path
 orch config validate
 orch restart
+orch stop
 orch logs
 orch status
 orch ui
@@ -130,39 +173,25 @@ orch doctor
 orch version
 ```
 
-Dashboard:
+Local UI:
 
 ```text
-http://127.0.0.1:47631/
-```
-
-Task Queue:
-
-```text
-http://127.0.0.1:47631/queue.html
-```
-
-Settings:
-
-```text
-http://127.0.0.1:47631/settings.html
-```
-
-Diagnostics:
-
-```text
-http://127.0.0.1:47631/diagnostics.html
+Dashboard:    http://127.0.0.1:47631/
+Task Queue:   http://127.0.0.1:47631/queue.html
+Settings:     http://127.0.0.1:47631/settings.html
+Diagnostics:  http://127.0.0.1:47631/diagnostics.html
+Desktop Stop: http://127.0.0.1:47631/stop.html
 ```
 
 ## Shared configuration
 
-With no explicit `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and `orch` CLI all resolve the same optional file:
+With no explicit `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and `orch` CLI resolve the same optional file:
 
 ```text
 ~\.codex-desktop-quota-guard\config.json
 ```
 
-Existing installs do not need this file. Defaults remain active until Settings is saved for the first time.
+Existing installs do not require this file. Built-in defaults remain active until Settings is saved for the first time.
 
 The dashboard exposes:
 
@@ -178,20 +207,20 @@ Settings
 └─ listen address
 ```
 
-Hard and soft thresholds still apply to both quota windows. Resume additionally requires every available window to meet its own resume threshold. A per-window resume threshold below the soft threshold does not bypass pause: that window must first be above the soft threshold, then satisfy its own resume threshold.
-
-For example, with the defaults:
+Default policy:
 
 ```text
-5h remaining:        100%
-weekly remaining:     16%
-hard:                  5%
-soft:                  10%
-5h resume:             20%
-weekly resume:          5%
-
-result: resumable
+hard threshold:    5%
+soft threshold:   10%
+5h resume:        20%
+weekly resume:     5%
+quota poll:       60s
+companion poll:    5s
+auto dispatch:   true
+project queue:   AUTO
 ```
+
+Hard and soft thresholds apply to both quota windows. Resume requires every available window to be above the soft pause boundary and to satisfy its own resume threshold.
 
 A legacy config containing only:
 
@@ -201,30 +230,33 @@ A legacy config containing only:
 }
 ```
 
-is still accepted. Until the Settings page is saved with the new fields, that legacy value is used as the resume threshold for both 5h and weekly windows. Newly saved configs use `fiveHourResumeThresholdPercent` and `weeklyResumeThresholdPercent` instead.
+is still accepted. Newly saved configs use `fiveHourResumeThresholdPercent` and `weeklyResumeThresholdPercent`.
 
-Settings are validated and persisted through:
+Settings are persisted through:
 
 ```text
 GET /v1/settings
 PUT /v1/settings
 ```
 
-Writes use a temporary file and replace `config.json` only after the new content is fully written. When persisted settings differ from the running daemon, Settings shows a **Restart daemon** button. The same operation is available from the CLI:
+Writes use a temporary file and replace `config.json` only after the new content is fully written.
+
+When saved settings differ from the running daemon, Settings exposes **Restart daemon**. The same operation is available from the CLI:
 
 ```powershell
 orch restart
 ```
 
-Restart is a graceful handoff: the running daemon starts a hidden replacement process, returns the accepted control request, shuts down its HTTP server, and the replacement waits for the predecessor health endpoint to disappear before binding with the saved configuration. No `taskkill` is used.
+Restart is a graceful handoff: a hidden replacement waits for the predecessor health endpoint to disappear before binding with the new saved configuration.
 
-If the companion poll setting changes, fully reopen Codex Desktop as well so `desktop-companion.exe` reloads the shared configuration.
+If `companionPollSeconds` changes, fully reopen Codex Desktop as well so `desktop-companion.exe` reloads the shared configuration.
 
 Explicit configuration remains supported:
 
 ```powershell
 orch status --config C:\path\to\config.json
 orch restart --config C:\path\to\config.json
+orch stop --config C:\path\to\config.json
 orch config --config C:\path\to\config.json show
 ```
 
@@ -240,43 +272,9 @@ MANUAL  Keep queued work waiting until Start now is pressed.
 PAUSED  Block all new queue dispatch for the project.
 ```
 
-Switching a project to `PAUSED` does not interrupt work that is already running; it only prevents new queue items from starting. `AUTO` also requires the global `autoDispatch` setting to be enabled. Manual Start bypasses automatic-dispatch policy, but it does not bypass quota, ordering, active-task, or crash-safety checks.
+Switching a project to `PAUSED` does not interrupt work already running; it only prevents new queue items from starting. `AUTO` also requires the global `autoDispatch` setting to be enabled.
 
-Queued items can be reordered by dragging the queue handle in the dashboard. The ↑/↓ buttons use the same atomic reorder path as a touch/keyboard fallback. QUEUED positions are always normalized to `1..N`; a partial unique SQLite index enforces that two queued items in the same project cannot own the same position.
-
-The reorder API replaces the complete queued order in one transaction:
-
-```text
-PUT /v1/project-tasks/reorder
-{
-  "projectId": "...",
-  "taskIds": ["task-c", "task-a", "task-b"]
-}
-```
-
-Every currently `QUEUED` task must appear exactly once. If the queue changed while the UI was dragging—for example because the scheduler just dispatched the first item—the stale reorder request fails with a conflict instead of mutating a different queue.
-
-Example:
-
-```text
-Project: DotRadar       Mode: MANUAL
-
-COMPLETED Implement SARIF output
-QUEUED #1 Add GitHub Actions integration   [Start now]
-QUEUED #2 Improve README examples
-QUEUED #3 Add benchmarks
-```
-
-Queue mode is persisted separately per project and is available through:
-
-```text
-GET   /v1/projects/{projectId}/queue-mode
-PATCH /v1/projects/{projectId}/queue-mode
-POST  /v1/project-tasks/{taskId}/start
-PUT   /v1/project-tasks/reorder
-```
-
-Safety rules:
+Queue safety rules:
 
 - at most one queued item runs per project;
 - only the first `QUEUED` item can be started manually;
@@ -297,6 +295,36 @@ QUEUED -> DISPATCHING -> RUNNING -> COMPLETED
                          +-> NEEDS_REVIEW
 ```
 
+## Desktop Stop
+
+Desktop Stop is a separate manual Windows-only path for a managed task that is currently `RUNNING`.
+
+Flow:
+
+```text
+Dashboard Stop
+  ↓
+queue durable stop(threadId, expectedTurnId)
+  ↓
+claim validates the same RUNNING task + turn
+  ↓
+native read_thread verifies the exact turn is inProgress
+  ↓
+UI Automation invokes the unique visible Stop control
+  ↓
+read_thread verifies the same turn became interrupted
+  ↓
+verified: CANCELLED
+```
+
+A successful Windows accessibility call is **not** considered proof that the turn stopped. The guard reads the Desktop thread back and only records `CANCELLED` when the exact expected turn reports `status=interrupted`.
+
+If `InvokePattern` is acknowledged but the exact same turn stays `inProgress`, Quota Guard can make one guarded physical-click fallback after re-verifying the same thread/turn and reacquiring the unique Stop button. If interruption is still not confirmed, the Stop action becomes `uncertain` and the task moves to `NEEDS_REVIEW`; it is never blindly clicked again.
+
+This matters because some Codex Desktop Windows builds have had cases where the visible Stop control itself does not actually interrupt the backend turn.
+
+See [`docs/DESKTOP_STOP.md`](docs/DESKTOP_STOP.md) for the detailed safety model.
+
 ## Manual recovery
 
 If a managed task becomes `NEEDS_REVIEW`, inspect the destination Desktop thread first, then use:
@@ -307,7 +335,7 @@ orch recover --thread <threadId> --resolution running
 orch recover --thread <threadId> --resolution cancel
 ```
 
-Use `retry` only when you confirmed the previous continuation did not arrive.
+Use `retry` only when you confirmed the previous continuation or Stop side effect did not already produce the intended result.
 
 ## Runtime logs and diagnostics
 
@@ -319,31 +347,19 @@ Structured JSON Lines logs are written under:
 └─ companion.log
 ```
 
-Use:
+Useful commands:
 
 ```powershell
 orch logs
 orch logs --tail 200
 orch logs --level error
 orch logs --component daemon
+orch logs --component companion
 orch logs --follow
 orch doctor
 ```
 
 The diagnostics dashboard checks configuration, daemon/runtime metadata, SQLite and queue integrity, companion installation, Codex CLI, MCP registration, and quota-provider access. The native Desktop pipe remains a Desktop-process check and is reported as `UNKNOWN` from the standalone daemon/CLI diagnostics path.
-
-## Default policy
-
-```text
-hard threshold:    5%
-soft threshold:   10%
-5h resume:        20%
-weekly resume:     5%
-quota poll:       60s
-companion poll:    5s
-auto dispatch:   true
-project queue:   AUTO
-```
 
 ## Project layout
 
@@ -357,29 +373,33 @@ internal/
   codexquota/         short-lived Codex app-server quota client
   config/             shared config resolution, validation, persistence
   daemon/             monitor + API + queue scheduler
-  desktop/            native Desktop delivery
+  desktop/            native Desktop delivery + Windows Stop automation
   diagnostics/        doctor/dashboard health checks
   mcpserver/          MCP tools + action delivery
   observability/      structured runtime logging and log reader
   store/              SQLite persistence
   domain/             task/project/queue models
   quota/              policy
-  webui/              embedded dashboard, queue, diagnostics, and Settings UI
+  webui/              embedded dashboard, queue, diagnostics, Settings, Stop UI
 .github/workflows/
   ci.yml
   release.yml
+  tag-release.yml
 ```
 
 Legacy PowerShell scripts may remain in the source tree for development/migration support, but they are not the canonical release install/uninstall flow.
 
 ## Docs
 
-- `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, background startup, configuration, and uninstall.
+- `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, daemon lifecycle, configuration, and uninstall.
+- `docs/DESKTOP_STOP.md` — verified Windows Desktop Stop flow and safety rules.
 - `docs/TROUBLESHOOTING.md` — daemon, native delivery, and recovery diagnostics.
 - `docs/DIAGNOSTICS.md` — doctor v2 and system diagnostics dashboard.
 - `docs/LOGGING.md` — structured daemon/companion logs and `orch logs`.
 - `docs/ARCHITECTURE.md` — Desktop-first architecture.
 
-## Important limitation
+## Important limitations
 
-Pause is cooperative at model/tool safe boundaries. The project does not claim a stable hard-interrupt API for arbitrary active Codex Desktop turns.
+Quota-driven pause remains cooperative at model/tool safe boundaries.
+
+Desktop Stop is Windows-only and depends on Codex Desktop's own visible Stop path. Quota Guard verifies whether the backend turn actually became `interrupted`, but it cannot force a Desktop-owned backend turn through a stable public hard-interrupt API when the current Codex Desktop build's own Stop behavior is broken. In that case the action is reported as uncertain / `NEEDS_REVIEW` instead of false success.
