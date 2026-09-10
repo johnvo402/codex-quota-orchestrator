@@ -10,16 +10,16 @@ import (
 )
 
 type settingsUpdate struct {
-	ListenAddr                       string   `json:"listenAddr"`
-	PollIntervalSeconds              int      `json:"pollIntervalSeconds"`
-	CompanionPollSeconds             int      `json:"companionPollSeconds"`
-	SoftThresholdPercent             float64  `json:"softThresholdPercent"`
-	HardThresholdPercent             float64  `json:"hardThresholdPercent"`
-	FiveHourResumeThresholdPercent   *float64 `json:"fiveHourResumeThresholdPercent"`
-	WeeklyResumeThresholdPercent     *float64 `json:"weeklyResumeThresholdPercent"`
-	ResumeThresholdPercent           *float64 `json:"resumeThresholdPercent"`
-	RequestTimeoutSeconds            int      `json:"requestTimeoutSeconds"`
-	AutoDispatch                     *bool    `json:"autoDispatch"`
+	ListenAddr                     string   `json:"listenAddr"`
+	PollIntervalSeconds            int      `json:"pollIntervalSeconds"`
+	CompanionPollSeconds           int      `json:"companionPollSeconds"`
+	SoftThresholdPercent           float64  `json:"softThresholdPercent"`
+	HardThresholdPercent           float64  `json:"hardThresholdPercent"`
+	FiveHourResumeThresholdPercent *float64 `json:"fiveHourResumeThresholdPercent"`
+	WeeklyResumeThresholdPercent   *float64 `json:"weeklyResumeThresholdPercent"`
+	ResumeThresholdPercent         *float64 `json:"resumeThresholdPercent"`
+	RequestTimeoutSeconds          int      `json:"requestTimeoutSeconds"`
+	AutoDispatch                   *bool    `json:"autoDispatch"`
 }
 
 type settingsResponse struct {
