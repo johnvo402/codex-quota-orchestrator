@@ -57,9 +57,9 @@ Inno Setup handles normal Windows installation concerns:
 
 - copies application files;
 - adds `%LOCALAPPDATA%\CodexQuotaGuard\bin` to the current User PATH;
-- registers per-user background startup through the Windows Run key;
 - creates the Windows Installed Apps entry and standard uninstaller;
-- uses the Windows Restart Manager when installed files are in use.
+- gracefully stops the installed quota daemon before replacing binaries;
+- uses Windows Restart Manager for other installed files that may still be in use.
 
 Codex-specific integration is deliberately delegated to the application command:
 
@@ -83,7 +83,33 @@ State is kept separately from installed binaries:
 ~\.codex-desktop-quota-guard\
 ```
 
-This includes SQLite task history, relay state, and the optional shared `config.json`. Normal reinstall/upgrade and uninstall preserve it.
+This includes SQLite task history, relay state, logs, and the optional shared `config.json`. Normal reinstall/upgrade and uninstall preserve it.
+
+## Desktop-bound daemon lifecycle
+
+The daemon is not registered in the current user's Windows Run key. It starts only when Codex Desktop launches the MCP companion and the companion needs the local guard service.
+
+```text
+Open Codex Desktop
+   ↓
+desktop-companion.exe starts
+   ↓
+companion checks /healthz
+   ↓
+starts orchestrator-daemon.exe when needed
+   ↓
+heartbeat lease keeps daemon alive
+   ↓
+Full Quit Codex Desktop
+   ↓
+companion disconnects / lease expires
+   ↓
+daemon gracefully exits
+```
+
+Multiple companion instances are safe. One companion exiting does not stop the daemon while another active lease remains.
+
+A clean companion shutdown releases its lease immediately. If Codex Desktop or the companion crashes, the missing heartbeat expires after the grace period and the daemon exits automatically.
 
 ## Upgrade / repair
 
@@ -95,9 +121,19 @@ CodexQuotaGuardSetup-vX.Y.Z.exe
 
 and run it again.
 
-Inno Setup identifies the existing installation using the same application ID and upgrades the files in place. If a file is in use, Windows Restart Manager handles the normal close/retry flow rather than the installer force-killing processes itself.
+Before Inno Setup replaces installed binaries, it asks the installed CLI to stop the daemon:
 
-After an upgrade, Codex bootstrap is refreshed automatically. To repair only the Codex integration later, run:
+```powershell
+orch stop
+```
+
+This closes the HTTP listener, SQLite handle, logs, and process cleanly so `orchestrator-daemon.exe` is not locked during the upgrade.
+
+Releases that predate `orch stop` cannot perform that graceful command themselves. For those legacy versions only, the installer uses runtime metadata to verify the recorded daemon identity and performs a narrowly scoped compatibility stop before replacing the old binary. Current-to-current upgrades use the graceful path.
+
+After an upgrade, Codex bootstrap is refreshed automatically. The installer does not keep a standalone daemon running; opening/reopening Codex Desktop starts it on demand through `desktop-companion.exe`.
+
+To repair only the Codex integration later, run:
 
 ```powershell
 orch setup
@@ -112,6 +148,8 @@ orch config show
 orch config path
 orch config validate
 orch restart
+orch stop
+orch logs
 orch status
 orch ui
 orch list
@@ -119,39 +157,19 @@ orch doctor
 orch version
 ```
 
-Dashboard:
+Local UI:
 
 ```text
-http://127.0.0.1:47631/
-```
-
-Settings:
-
-```text
-http://127.0.0.1:47631/settings.html
+Dashboard:    http://127.0.0.1:47631/
+Task Queue:   http://127.0.0.1:47631/queue.html
+Settings:     http://127.0.0.1:47631/settings.html
+Diagnostics:  http://127.0.0.1:47631/diagnostics.html
+Desktop Stop: http://127.0.0.1:47631/stop.html
 ```
 
 If `orch` is not recognized immediately after installation, open a new terminal so it receives the updated User PATH.
 
-## Background startup
-
-At Windows login, the installer starts:
-
-```text
-%LOCALAPPDATA%\CodexQuotaGuard\bin\orchestrator-daemon.exe daemon
-```
-
-through the current user's Windows Run key.
-
-When Codex Desktop launches `desktop-companion.exe`, the companion also checks:
-
-```text
-http://127.0.0.1:47631/healthz
-```
-
-and starts the hidden daemon if it is not already healthy.
-
-## Restarting the daemon
+## Restarting and stopping the daemon
 
 Use either the **Restart daemon** button on the Settings page or:
 
@@ -159,7 +177,7 @@ Use either the **Restart daemon** button on the Settings page or:
 orch restart
 ```
 
-The restart is graceful and does not use `taskkill`:
+The restart is a graceful handoff:
 
 ```text
 running daemon
@@ -177,7 +195,29 @@ replacement loads saved config and starts
 
 `orch restart` waits until the replacement health endpoint is available before reporting success. This also handles the common case where Settings changes the listen port: the Settings page moves itself to the new local address once the daemon becomes healthy there.
 
+To stop the daemon without starting a replacement:
+
+```powershell
+orch stop
+```
+
+When Codex Desktop is still open, its companion may start the daemon again because the guard is still needed. A full Codex Desktop quit removes the companion leases and leaves the daemon stopped.
+
 If `companionPollSeconds` changes, fully reopen Codex Desktop after the daemon restart because `desktop-companion.exe` is a separate Codex-managed process.
+
+## Desktop Stop
+
+`Desktop Stop` is a Windows-only control for a managed task that is currently `RUNNING`. It does not send a chat prompt.
+
+The guard records the exact `threadId` and `turnId`, navigates Codex Desktop to that thread, confirms through native `read_thread` that the same turn is still `inProgress`, then operates the unique visible Stop control.
+
+An accessibility `InvokePattern` call alone is not considered success. Quota Guard reads the thread back and only marks the managed task `CANCELLED` after the exact expected turn reports `status=interrupted`.
+
+If the first accessibility invocation leaves the same turn `inProgress`, Quota Guard can perform one guarded physical-click fallback after re-verifying the exact thread/turn and reacquiring the unique Stop button. The cursor is restored afterward.
+
+If a Stop side effect was attempted but backend interruption cannot be confirmed, the durable action becomes `uncertain` and the managed task becomes `NEEDS_REVIEW`. It is never blindly clicked again.
+
+See [`DESKTOP_STOP.md`](DESKTOP_STOP.md) for the detailed safety model.
 
 ## Uninstall
 
@@ -197,7 +237,7 @@ or run the standard Inno Setup uninstaller:
 %LOCALAPPDATA%\CodexQuotaGuard\unins000.exe
 ```
 
-Before installed files are removed, the uninstaller runs:
+Before installed files are removed, the uninstaller stops the quota daemon and runs:
 
 ```powershell
 orch teardown
@@ -221,7 +261,7 @@ Without `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and CLI all 
 %USERPROFILE%\.codex-desktop-quota-guard\config.json
 ```
 
-If that file does not exist, built-in defaults are used so existing installs continue working unchanged.
+If that file does not exist, built-in defaults are used.
 
 Defaults:
 
@@ -229,9 +269,10 @@ Defaults:
 listen:          127.0.0.1:47631
 hard threshold:  5%
 soft threshold:  10%
-resume:          20%
+5h resume:       20%
+weekly resume:    5%
 quota poll:      60s
-companion poll:  5s
+companion poll:   5s
 request timeout: 20s
 auto dispatch:   true
 ```
@@ -245,7 +286,8 @@ PUT /v1/settings
 
 The settings page can edit:
 
-- hard / soft / resume quota thresholds;
+- hard / soft pause thresholds;
+- independent 5-hour and weekly resume thresholds;
 - quota polling interval;
 - Desktop companion polling interval;
 - Codex request timeout;
@@ -271,6 +313,7 @@ Explicit config paths remain supported:
 ```powershell
 orch status --config C:\path\to\config.json
 orch restart --config C:\path\to\config.json
+orch stop --config C:\path\to\config.json
 orch config --config C:\path\to\config.json show
 orch daemon --config C:\path\to\config.json
 ```
@@ -279,14 +322,16 @@ Advanced/development environment overrides remain available through `CDQG_CONFIG
 
 ## Antivirus / reputation note
 
-The release installer is now built with Inno Setup rather than a custom self-copying Go installer. This removes custom installer behaviors such as self-copying to `Uninstall.exe`, manual uninstall registry management, and force-killing application processes.
+The release installer is built with Inno Setup rather than a custom self-copying Go installer. This avoids custom installer behaviors such as self-copying to an uninstall executable, manual uninstall registry management, and broad force-killing of application processes.
 
-The project still intends to add trusted code signing for release binaries. Until signed reputation is established, Windows Defender or SmartScreen may still occasionally warn on a new release. Do not solve that by disabling Defender or excluding broad folders; verify the published SHA256 and report false positives when needed.
+The project still intends to add trusted code signing for release binaries. Until signed reputation is established, Windows Defender or SmartScreen may occasionally warn on a new release. Do not solve that by disabling Defender or excluding broad folders; verify the published SHA256 and report false positives when needed.
 
 ## Source/development scripts
 
 Legacy PowerShell scripts may remain in the repository for development and migration testing, but release users should use the Inno Setup installer and Windows Installed Apps.
 
-## Important limitation
+## Important limitations
 
-Pause remains cooperative at model/tool safe boundaries. The project does not claim a stable hard-interrupt API for arbitrary active Codex Desktop turns.
+Quota-driven pause remains cooperative at model/tool safe boundaries.
+
+Desktop Stop depends on Codex Desktop's own Windows Stop path. The guard verifies the backend turn afterward, but if the current Codex Desktop build's Stop control itself is broken, Quota Guard cannot safely force a Desktop-owned turn through a separate competing app-server writer. It reports `NEEDS_REVIEW` instead of false success.
