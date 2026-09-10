@@ -218,7 +218,7 @@ func (s *Server) taskDashboardAction(w http.ResponseWriter, r *http.Request, id,
 		}
 		jsonOut(w, 200, items)
 	case "cancel":
-		updated, err := s.store.Transition(r.Context(), t.ThreadID, domain.StateCancelled, "cancelled from dashboard")
+		updated, err := s.store.SafeCancelManagedTask(r.Context(), t.ThreadID)
 		if err != nil {
 			httpErr(w, http.StatusConflict, err)
 			return
