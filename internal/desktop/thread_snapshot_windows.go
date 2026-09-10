@@ -40,9 +40,9 @@ func (s *windowsNativeSender) LatestTurn(ctx context.Context, threadID string) (
 		"method":  "tools/call",
 		"params": map[string]any{
 			"arguments": map[string]any{
-				"threadId":             threadID,
-				"turnLimit":            1,
-				"includeOutputs":       false,
+				"threadId":              threadID,
+				"turnLimit":             1,
+				"includeOutputs":        false,
 				"maxOutputCharsPerItem": 0,
 			},
 			"callId":    fmt.Sprintf("cdqg-%s", callID),
@@ -105,8 +105,8 @@ func (s *windowsNativeSender) LatestTurn(ctx context.Context, threadID string) (
 	}
 
 	var result struct {
-		Success *bool `json:"success"`
-		IsError bool  `json:"isError"`
+		Success      *bool `json:"success"`
+		IsError      bool  `json:"isError"`
 		ContentItems []struct {
 			Text string `json:"text"`
 		} `json:"contentItems"`
