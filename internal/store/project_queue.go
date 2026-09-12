@@ -76,7 +76,7 @@ func (s *Store) CreateProjectTask(ctx context.Context, projectID, objective, det
 	}
 	now := time.Now().UTC().UnixMilli()
 	id := newID()
-	_, err = s.db.ExecContext(ctx, `INSERT INTO project_tasks(id,project_id,objective,details,position,state,created_at,updated_at) VALUES(?,?,?,?,?,'QUEUED',?,?)`, id, projectID, objective, details, pos, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO project_tasks(id,project_id,objective,details,position,state,created_at,updated_at) VALUES(?,?,?,?,?,'QUEUED',?,?)`, id, projectID, objective, details, pos, now, now)
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
