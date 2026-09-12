@@ -73,8 +73,8 @@ func BeginProcessLifecycle(dataDir, component string) (ProcessLifecycleMarker, *
 }
 
 // MarkProcessClean closes the marker only when it still belongs to the current
-// process. This prevents a stale companion or shutdown callback from marking a
-// newer daemon instance clean by accident.
+// process. This prevents a stale shutdown callback from marking a newer daemon
+// instance clean by accident.
 func MarkProcessClean(dataDir, component, reason string) error {
 	path := LifecycleMarkerPath(dataDir, component)
 	b, err := os.ReadFile(path)
@@ -102,15 +102,11 @@ func writeLifecycleMarker(path string, marker ProcessLifecycleMarker) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(b, '\n'), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
+	// Write directly instead of rename-over-existing. That keeps this helper
+	// reliable on Windows, where replacing an existing destination with Rename
+	// is not as portable as on Unix. The marker is diagnostic state, not product
+	// state, so a partially written file after a power loss is acceptable.
+	return os.WriteFile(path, append(b, '\n'), 0o600)
 }
 
 func appendLifecycleEvent(dataDir string, marker ProcessLifecycleMarker, event string) error {
