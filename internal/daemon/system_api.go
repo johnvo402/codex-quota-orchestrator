@@ -25,10 +25,11 @@ const (
 var launchRestartChildFn = launchRestartChild
 
 type companionRegistry struct {
-	mu           sync.Mutex
-	seen         bool
-	leases       map[string]time.Time
-	shutdownOnce sync.Once
+	mu             sync.Mutex
+	seen           bool
+	leases         map[string]time.Time
+	idleGeneration uint64
+	shutdownOnce   sync.Once
 }
 
 var companionRegistries sync.Map
@@ -117,6 +118,9 @@ func (s *Server) handleCompanionLifecycle(w http.ResponseWriter, r *http.Request
 		registry.mu.Lock()
 		registry.seen = true
 		registry.leases[instanceID] = now
+		// Every heartbeat invalidates any pending idle shutdown that may have
+		// been armed by a previous short-lived MCP companion instance.
+		registry.idleGeneration++
 		registry.mu.Unlock()
 
 		timeout := s.companionLeaseTimeout()
@@ -128,13 +132,21 @@ func (s *Server) handleCompanionLifecycle(w http.ResponseWriter, r *http.Request
 		registry.mu.Lock()
 		registry.seen = true
 		delete(registry.leases, instanceID)
-		shouldStop := len(registry.leases) == 0
+		registry.idleGeneration++
+		generation := registry.idleGeneration
+		shouldArmIdleShutdown := len(registry.leases) == 0
 		registry.mu.Unlock()
 
 		jsonOut(w, http.StatusOK, map[string]any{"ok": true})
 		flushResponse(w)
-		if shouldStop {
-			s.scheduleDaemonShutdown("last Codex Desktop companion disconnected")
+		if shouldArmIdleShutdown {
+			// Codex Desktop may recycle the MCP companion during startup or tool
+			// discovery. Do not interpret one clean stdio disconnect as a full
+			// Desktop quit. Give a replacement companion one full lease window to
+			// appear; any heartbeat invalidates this pending shutdown generation.
+			grace := s.companionLeaseTimeout()
+			s.log.Info("last Codex Desktop companion disconnected; waiting for replacement", "grace", grace)
+			s.scheduleCompanionIdleShutdown(registry, generation, grace, "last Codex Desktop companion disconnected")
 		}
 	default:
 		httpErr(w, http.StatusBadRequest, fmt.Errorf("unknown companion state %q", stateName))
@@ -165,12 +177,41 @@ func (s *Server) expireCompanionLease(registry *companionRegistry, instanceID st
 		return
 	}
 	delete(registry.leases, instanceID)
+	registry.idleGeneration++
+	generation := registry.idleGeneration
 	shouldStop := registry.seen && len(registry.leases) == 0
 	registry.mu.Unlock()
 
 	if shouldStop {
-		s.scheduleDaemonShutdown("Codex Desktop companion heartbeat expired")
+		s.scheduleCompanionIdleShutdown(registry, generation, 0, "Codex Desktop companion heartbeat expired")
 	}
+}
+
+func companionIdleAtGeneration(registry *companionRegistry, generation uint64) bool {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	return registry.seen && len(registry.leases) == 0 && registry.idleGeneration == generation
+}
+
+func (s *Server) scheduleCompanionIdleShutdown(registry *companionRegistry, generation uint64, delay time.Duration, reason string) {
+	time.AfterFunc(delay, func() {
+		// Give a just-arriving replacement heartbeat a final opportunity to
+		// invalidate this generation before shutdown becomes irreversible.
+		time.Sleep(75 * time.Millisecond)
+		if !companionIdleAtGeneration(registry, generation) {
+			return
+		}
+		registry.shutdownOnce.Do(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := s.Shutdown(ctx); err != nil {
+				s.log.Warn("daemon shutdown failed", "reason", reason, "error", err)
+			} else {
+				s.log.Info("daemon shutdown requested", "reason", reason)
+			}
+			companionRegistries.Delete(s)
+		})
+	})
 }
 
 func (s *Server) scheduleDaemonShutdown(reason string) {
