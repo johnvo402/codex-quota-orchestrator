@@ -39,9 +39,11 @@ func main() {
 	}
 
 	log.Info("Desktop companion started")
-	ensureDaemon(cfg, log)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	instanceID := fmt.Sprintf("%d-%d", os.Getpid(), time.Now().UnixNano())
+	// Do not delay the MCP stdio handshake while the local daemon opens or
+	// migrates its SQLite state. Lifecycle management starts immediately in the
+	// background and will spawn/retry the daemon until a heartbeat succeeds.
 	go maintainDaemonLifecycle(ctx, cfg, instanceID, log)
 
 	runErr := mcpserver.New(cfg, log).Run(ctx, os.Stdin, os.Stdout)
@@ -70,8 +72,9 @@ func maintainDaemonLifecycle(ctx context.Context, cfg config.Config, instanceID 
 			return
 		}
 
-		// If the daemon disappeared unexpectedly while Codex is still open,
-		// restore it and re-register this companion lease.
+		// If the daemon is absent while Codex is open, restore it. This runs in
+		// the lifecycle goroutine so daemon startup can never block the MCP stdio
+		// handshake that keeps the companion attached to Codex Desktop.
 		log.Warn("quota daemon heartbeat failed", "error", err)
 		ensureDaemon(cfg, log)
 		retryCtx, retryCancel := context.WithTimeout(ctx, 1200*time.Millisecond)
@@ -143,18 +146,30 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 	cmd.Stderr = nil
 	cmd.Stdin = nil
 	if err := cmd.Start(); err != nil {
-		log.Warn("failed to auto-start quota daemon", "error", err)
+		log.Warn("failed to auto-start quota daemon", "path", daemon, "error", err)
 		return
 	}
-	_ = cmd.Process.Release()
+	pid := cmd.Process.Pid
+	log.Info("quota daemon process spawned", "path", daemon, "pid", pid)
+	// Wait in a goroutine instead of releasing the Process handle. This gives us
+	// a durable companion.log signal when an auto-started daemon exits early,
+	// while still allowing the daemon to outlive the companion process itself.
+	go func() {
+		if err := cmd.Wait(); err != nil {
+			log.Warn("auto-started quota daemon exited", "pid", pid, "error", err)
+			return
+		}
+		log.Info("auto-started quota daemon exited", "pid", pid)
+	}()
+
 	for i := 0; i < 10; i++ {
 		if daemonHealthy(cfg) {
-			log.Info("quota daemon auto-started with Codex Desktop")
+			log.Info("quota daemon auto-started with Codex Desktop", "pid", pid)
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	log.Warn("quota daemon was started but did not become healthy yet")
+	log.Warn("quota daemon was spawned but did not become healthy yet; lifecycle heartbeat will retry", "pid", pid)
 }
 
 func daemonHealthy(cfg config.Config) bool {
