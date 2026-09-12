@@ -66,6 +66,9 @@ func TestProcessLifecycleDetectsPreviousUncleanExit(t *testing.T) {
 
 func TestMarkProcessCleanRejectsForeignPID(t *testing.T) {
 	dataDir := t.TempDir()
+	if err := os.MkdirAll(LogDir(dataDir), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	marker := ProcessLifecycleMarker{
 		RunID:     "foreign",
 		Component: "daemon",
