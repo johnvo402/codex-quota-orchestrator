@@ -16,9 +16,13 @@ func TestIsTaskCompleteRequest(t *testing.T) {
 }
 
 func TestIsTaskCompleteRequestRejectsOtherRequests(t *testing.T) {
+	otherTool, err := json.Marshal(callParams{Name: "quota_check"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []request{
 		{Method: "ping"},
-		{Method: "tools/call", Params: json.RawMessage(`{"name":"quota_check"}`)},
+		{Method: "tools/call", Params: otherTool},
 		{Method: "tools/call", Params: json.RawMessage(`not-json`)},
 	} {
 		if isTaskCompleteRequest(tc) {
