@@ -28,7 +28,6 @@ func (s *Store) ensureActionDiagnosticsSchema(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("inspect actions schema: %w", err)
 	}
-	defer rows.Close()
 
 	hasErrorText := false
 	for rows.Next() {
@@ -36,6 +35,7 @@ func (s *Store) ensureActionDiagnosticsSchema(ctx context.Context) error {
 		var name, columnType string
 		var defaultValue sql.NullString
 		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &pk); err != nil {
+			_ = rows.Close()
 			return fmt.Errorf("read actions schema: %w", err)
 		}
 		if strings.EqualFold(name, "error_text") {
@@ -43,7 +43,11 @@ func (s *Store) ensureActionDiagnosticsSchema(ctx context.Context) error {
 		}
 	}
 	if err := rows.Err(); err != nil {
+		_ = rows.Close()
 		return fmt.Errorf("inspect actions schema rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close actions schema cursor: %w", err)
 	}
 	if hasErrorText {
 		return nil
