@@ -169,6 +169,16 @@ func runDaemon(cfg config.Config) error {
 	}
 	defer logCloser.Close()
 
+	currentLifecycle, previousLifecycle, lifecycleErr := observability.BeginProcessLifecycle(cfg.DataDir, "daemon")
+	if lifecycleErr != nil {
+		log.Warn("daemon lifecycle diagnostics unavailable", "error", lifecycleErr)
+	} else {
+		log.Info("daemon lifecycle started", "runId", currentLifecycle.RunID, "pid", currentLifecycle.PID, "parentPid", currentLifecycle.ParentPID, "marker", observability.LifecycleMarkerPath(cfg.DataDir, "daemon"))
+		if previousLifecycle != nil && !previousLifecycle.CleanExit {
+			log.Warn("previous daemon did not record a clean exit", "runId", previousLifecycle.RunID, "pid", previousLifecycle.PID, "parentPid", previousLifecycle.ParentPID, "startedAt", previousLifecycle.StartedAt)
+		}
+	}
+
 	st, err := store.Open(cfg.DBPath())
 	if err != nil {
 		return err
@@ -193,15 +203,24 @@ func runDaemon(cfg config.Config) error {
 	srv := daemon.NewServer(cfg.ListenAddr, svc, st, log)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(listener) }()
-	log.Info("Desktop quota daemon started", "listen", cfg.ListenAddr, "db", cfg.DBPath(), "dashboard", cfg.BaseURL())
+	log.Info("Desktop quota daemon started", "listen", cfg.ListenAddr, "db", cfg.DBPath(), "dashboard", cfg.BaseURL(), "pid", os.Getpid(), "parentPid", os.Getppid())
 	select {
 	case <-ctx.Done():
 		log.Info("Desktop quota daemon stopping", "reason", "signal")
 		sd, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
-		return srv.Shutdown(sd)
+		if err := srv.Shutdown(sd); err != nil {
+			return err
+		}
+		if err := observability.MarkProcessClean(cfg.DataDir, "daemon", "signal"); err != nil {
+			log.Warn("daemon lifecycle clean-exit marker failed", "reason", "signal", "error", err)
+		}
+		return nil
 	case err := <-errCh:
 		if errors.Is(err, http.ErrServerClosed) {
+			if markErr := observability.MarkProcessClean(cfg.DataDir, "daemon", "server_closed"); markErr != nil {
+				log.Warn("daemon lifecycle clean-exit marker failed", "reason", "server_closed", "error", markErr)
+			}
 			log.Info("Desktop quota daemon stopped")
 			return nil
 		}
@@ -293,16 +312,18 @@ func status(cfg config.Config, jsonOut bool) error {
 	q, qErr := st.LatestQuota(ctx)
 	relay, relayErr := desktop.LoadRelay(cfg.RelayPath())
 	out := map[string]any{
-		"version":         version,
-		"daemonRunning":   daemonHealthy(cfg),
-		"listenAddr":      cfg.ListenAddr,
-		"dashboardURL":    cfg.BaseURL() + "/",
-		"dataDir":         cfg.DataDir,
-		"dbPath":          cfg.DBPath(),
-		"managedTasks":    len(items),
-		"taskStateCounts": counts,
-		"relayConfigured": relayErr == nil,
-		"relay":           relay,
+		"version":            version,
+		"daemonRunning":      daemonHealthy(cfg),
+		"listenAddr":         cfg.ListenAddr,
+		"dashboardURL":       cfg.BaseURL() + "/",
+		"dataDir":            cfg.DataDir,
+		"dbPath":             cfg.DBPath(),
+		"daemonCrashLog":     observability.LogPath(cfg.DataDir, "daemon-crash"),
+		"daemonLifecycleLog": observability.LifecycleEventPath(cfg.DataDir, "daemon"),
+		"managedTasks":       len(items),
+		"taskStateCounts":    counts,
+		"relayConfigured":    relayErr == nil,
+		"relay":              relay,
 	}
 	if qErr == nil {
 		out["quota"] = q
@@ -318,6 +339,8 @@ func status(cfg config.Config, jsonOut bool) error {
 	fmt.Printf("Dashboard:     %s/\n", cfg.BaseURL())
 	fmt.Printf("Data:          %s\n", cfg.DataDir)
 	fmt.Printf("Config:        %s\n", cfg.ConfigPath())
+	fmt.Printf("Crash log:     %s\n", observability.LogPath(cfg.DataDir, "daemon-crash"))
+	fmt.Printf("Lifecycle log: %s\n", observability.LifecycleEventPath(cfg.DataDir, "daemon"))
 	if qErr == nil {
 		fmt.Printf("Quota 5h:      %s\n", windowRemaining(q.FiveHour))
 		fmt.Printf("Quota weekly:  %s\n", windowRemaining(q.Weekly))
