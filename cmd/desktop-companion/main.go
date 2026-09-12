@@ -139,8 +139,8 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 		log.Warn("orchestrator daemon binary not found next to desktop companion", "path", daemon, "error", err)
 		return
 	}
+
 	cmd := exec.Command(daemon, "daemon")
-	configureBackgroundCommand(cmd)
 	cmd.Stdout = nil
 	cmd.Stdin = nil
 
@@ -152,27 +152,45 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 		cmd.Stderr = crashFile
 	}
 
-	if err := cmd.Start(); err != nil {
+	cmd, startInfo, startErr := startBackgroundCommand(cmd)
+	if startInfo.ProbeError != nil {
+		log.Warn("cannot probe companion Windows job membership", "error", startInfo.ProbeError)
+	} else if startInfo.JobSupported {
+		log.Info("companion Windows job membership", "inJob", startInfo.ParentInJob)
+	}
+	if startInfo.BreakawayError != nil {
+		log.Warn("CREATE_BREAKAWAY_FROM_JOB failed; using inherited-job fallback", "error", startInfo.BreakawayError)
+	}
+	if startErr != nil {
 		if crashFile != nil {
 			_ = crashFile.Close()
 		}
-		log.Warn("failed to auto-start quota daemon", "error", err)
+		log.Warn("failed to auto-start quota daemon", "error", startErr)
 		return
 	}
+
 	pid := cmd.Process.Pid
-	log.Info("quota daemon process spawned", "pid", pid, "parentPid", os.Getpid(), "stderr", crashPath)
+	log.Info(
+		"quota daemon process spawned",
+		"pid", pid,
+		"parentPid", os.Getpid(),
+		"stderr", crashPath,
+		"parentInJob", startInfo.ParentInJob,
+		"breakaway", startInfo.Breakaway,
+		"fallback", startInfo.Fallback,
+	)
 	_ = cmd.Process.Release()
 	if crashFile != nil {
 		_ = crashFile.Close()
 	}
 	for i := 0; i < 10; i++ {
 		if daemonHealthy(cfg) {
-			log.Info("quota daemon auto-started with Codex Desktop", "pid", pid)
+			log.Info("quota daemon auto-started with Codex Desktop", "pid", pid, "breakaway", startInfo.Breakaway)
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	log.Warn("quota daemon was started but did not become healthy yet", "pid", pid, "stderr", crashPath)
+	log.Warn("quota daemon was started but did not become healthy yet", "pid", pid, "stderr", crashPath, "breakaway", startInfo.Breakaway)
 }
 
 func openDaemonCrashLog(cfg config.Config) (*os.File, string, error) {
