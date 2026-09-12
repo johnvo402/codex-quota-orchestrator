@@ -134,6 +134,10 @@ WHERE id=? AND status='pending'
 }
 
 func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, success bool, errorText string) error {
+	if err := s.ensureActionDiagnosticsSchema(ctx); err != nil {
+		return err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -156,7 +160,7 @@ func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, succe
 		newStatus = "failed"
 	}
 	now := time.Now().UTC().UnixMilli()
-	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,updated_at=? WHERE id=?`, newStatus, now, actionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,error_text=?,updated_at=? WHERE id=?`, newStatus, strings.TrimSpace(errorText), now, actionID); err != nil {
 		return err
 	}
 
@@ -211,6 +215,10 @@ func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, succe
 }
 
 func (s *Store) MarkActionUncertain(ctx context.Context, actionID int64, reason string) error {
+	if err := s.ensureActionDiagnosticsSchema(ctx); err != nil {
+		return err
+	}
+
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -228,8 +236,12 @@ func (s *Store) MarkActionUncertain(ctx context.Context, actionID int64, reason 
 		return fmt.Errorf("cannot mark action %d uncertain from status %s", actionID, status)
 	}
 
+	diagnosticReason := strings.TrimSpace(reason)
+	if diagnosticReason == "" {
+		diagnosticReason = "delivery outcome is uncertain"
+	}
 	now := time.Now().UTC().UnixMilli()
-	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status='uncertain',updated_at=? WHERE id=?`, now, actionID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status='uncertain',error_text=?,updated_at=? WHERE id=?`, diagnosticReason, now, actionID); err != nil {
 		return err
 	}
 
