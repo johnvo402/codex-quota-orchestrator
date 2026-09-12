@@ -92,34 +92,19 @@ func (s *Store) ClaimAction(ctx context.Context, actionID int64) error {
 	}
 	defer tx.Rollback()
 
-	var kind, threadID, message, status string
-	if err := tx.QueryRowContext(ctx, `SELECT kind,thread_id,message,status FROM actions WHERE id=?`, actionID).Scan(&kind, &threadID, &message, &status); err != nil {
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM actions WHERE id=?`, actionID).Scan(&status); err != nil {
 		return err
 	}
 	if status != "pending" {
 		return ErrActionNotPending
 	}
 
-	now := time.Now().UTC().UnixMilli()
-	if kind == ActionKindStop {
-		if err := validateStopClaimTx(ctx, tx, threadID, message); err != nil {
-			// The Stop request never crossed the external side-effect boundary, so
-			// a stale request can be invalidated safely instead of becoming review.
-			if _, updateErr := tx.ExecContext(ctx, `UPDATE actions SET status='cancelled',updated_at=? WHERE id=? AND status='pending'`, now, actionID); updateErr != nil {
-				return updateErr
-			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				return commitErr
-			}
-			return err
-		}
-	}
-
 	result, err := tx.ExecContext(ctx, `
 UPDATE actions
 SET status='delivering', updated_at=?
 WHERE id=? AND status='pending'
-`, now, actionID)
+`, time.Now().UTC().UnixMilli(), actionID)
 	if err != nil {
 		return err
 	}
@@ -162,13 +147,6 @@ func (s *Store) CompleteClaimedAction(ctx context.Context, actionID int64, succe
 	now := time.Now().UTC().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status=?,error_text=?,updated_at=? WHERE id=?`, newStatus, strings.TrimSpace(errorText), now, actionID); err != nil {
 		return err
-	}
-
-	if kind == ActionKindStop {
-		if err := completeStopActionTx(ctx, tx, actionID, threadID, success, errorText, now); err != nil {
-			return err
-		}
-		return tx.Commit()
 	}
 
 	if isProjectTaskAction(kind) {
@@ -243,13 +221,6 @@ func (s *Store) MarkActionUncertain(ctx context.Context, actionID int64, reason 
 	now := time.Now().UTC().UnixMilli()
 	if _, err := tx.ExecContext(ctx, `UPDATE actions SET status='uncertain',error_text=?,updated_at=? WHERE id=?`, diagnosticReason, now, actionID); err != nil {
 		return err
-	}
-
-	if kind == ActionKindStop {
-		if err := markStopActionUncertainTx(ctx, tx, actionID, threadID, reason, now); err != nil {
-			return err
-		}
-		return tx.Commit()
 	}
 
 	if isProjectTaskAction(kind) {
