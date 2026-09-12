@@ -48,6 +48,13 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Keep additive action-table migrations in the store-open path. Runtime
+	// recovery executes before the HTTP server becomes healthy, so it must never
+	// discover a schema upgrade lazily while handling an interrupted delivery.
+	if err := s.ensureActionDiagnosticsSchema(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
 	if err := s.ensureDashboardSchema(); err != nil {
 		db.Close()
 		return nil, err
@@ -149,10 +156,25 @@ func (s *Store) ListTasks(ctx context.Context) ([]domain.Task, error) {
 	defer rows.Close()
 	var out []domain.Task
 	for rows.Next() {
-		t, err := scanTask(rows)
-		if err != nil {
+		var t domain.Task
+		var state string
+		var q sql.NullFloat64
+		var reset sql.NullInt64
+		var created, updated int64
+		if err := rows.Scan(&t.ID, &t.ThreadID, &t.TurnID, &t.Objective, &t.Workspace, &state, &t.PauseReason, &t.Checkpoint, &t.Pending, &t.LastTest, &q, &reset, &created, &updated); err != nil {
 			return nil, err
 		}
+		t.State = domain.TaskState(state)
+		if q.Valid {
+			v := q.Float64
+			t.LastQuotaRemaining = &v
+		}
+		if reset.Valid {
+			v := time.UnixMilli(reset.Int64)
+			t.LastQuotaResetAt = &v
+		}
+		t.CreatedAt = time.UnixMilli(created)
+		t.UpdatedAt = time.UnixMilli(updated)
 		out = append(out, t)
 	}
 	return out, rows.Err()
