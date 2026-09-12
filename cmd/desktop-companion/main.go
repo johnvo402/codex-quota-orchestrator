@@ -39,6 +39,7 @@ func main() {
 	}
 
 	log.Info("Desktop companion started", "pid", os.Getpid(), "parentPid", os.Getppid())
+	logDesktopHostIdentity(log)
 	// Preserve the proven v0.1.5 startup ordering: make sure the daemon exists
 	// before entering the MCP stdio loop, then let the heartbeat own recovery.
 	ensureDaemon(cfg, log)
@@ -108,6 +109,7 @@ func signalCompanion(ctx context.Context, cfg config.Config, instanceID, state s
 	req.Header.Set(systemControlHeader, "companion")
 	req.Header.Set(companionIDHeader, instanceID)
 	req.Header.Set(companionStateHeader, state)
+	applyDesktopHostHeader(req)
 
 	client := &http.Client{Timeout: 1200 * time.Millisecond}
 	resp, err := client.Do(req)
