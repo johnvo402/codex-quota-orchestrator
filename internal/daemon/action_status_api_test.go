@@ -13,7 +13,7 @@ import (
 	"codex-desktop-quota-guard/internal/store"
 )
 
-func TestActionStatusEndpointShowsStopFailure(t *testing.T) {
+func TestActionStatusEndpointShowsDeliveryFailure(t *testing.T) {
 	st, err := store.Open(filepath.Join(t.TempDir(), "state.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -21,10 +21,7 @@ func TestActionStatusEndpointShowsStopFailure(t *testing.T) {
 	defer st.Close()
 
 	ctx := context.Background()
-	if _, err := st.UpsertTask(ctx, "thread-action-api", "turn-action-api", "working", `D:\work`); err != nil {
-		t.Fatal(err)
-	}
-	action, err := st.QueueStopSafe(ctx, "thread-action-api")
+	action, err := st.EnqueueAction(ctx, "pause_notice", "thread-action-api", "pause safely")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,11 +49,11 @@ func TestActionStatusEndpointShowsStopFailure(t *testing.T) {
 	if err := st.ClaimAction(ctx, action.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CompleteClaimedAction(ctx, action.ID, false, "Stop button missing"); err != nil {
+	if err := st.CompleteClaimedAction(ctx, action.ID, false, "native delivery failed"); err != nil {
 		t.Fatal(err)
 	}
 	got := get()
-	if got.Status != "failed" || got.Error != "Stop button missing" {
+	if got.Status != "failed" || got.Error != "native delivery failed" {
 		t.Fatalf("action status=%#v", got)
 	}
 }
