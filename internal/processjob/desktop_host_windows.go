@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"syscall"
+	"unsafe"
 )
 
 const (
@@ -38,7 +39,8 @@ func snapshotProcesses() (map[int]processInfo, error) {
 	}
 	defer syscall.CloseHandle(snapshot)
 
-	entry := syscall.ProcessEntry32{Size: uint32(syscall.SizeofProcessEntry32)}
+	entry := syscall.ProcessEntry32{}
+	entry.Size = uint32(unsafe.Sizeof(entry))
 	if err := syscall.Process32First(snapshot, &entry); err != nil {
 		return nil, err
 	}
@@ -76,7 +78,7 @@ func ProcessAlive(pid int) (bool, error) {
 	defer syscall.CloseHandle(h)
 
 	var exitCode uint32
-	ok, _, callErr := procGetExitCodeProcess.Call(uintptr(h), uintptr(unsafePointer(&exitCode)))
+	ok, _, callErr := procGetExitCodeProcess.Call(uintptr(h), uintptr(unsafe.Pointer(&exitCode)))
 	if ok == 0 {
 		if callErr != nil && callErr != syscall.Errno(0) {
 			return false, callErr
@@ -85,5 +87,3 @@ func ProcessAlive(pid int) (bool, error) {
 	}
 	return exitCode == stillActive, nil
 }
-
-func unsafePointer(v *uint32) unsafe.Pointer { return unsafe.Pointer(v) }
