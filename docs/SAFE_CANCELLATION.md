@@ -40,7 +40,7 @@ DISPATCHING + delivering action
 
 RUNNING / already delivered
   -> cancellation rejected
-  -> a future cooperative-stop flow is required to interrupt active Desktop work safely
+  -> end active work directly in Codex Desktop if an immediate stop is required
 ```
 
 The queue item and linked action are changed in one SQLite transaction. `ClaimAction` only accepts `pending`, so an action invalidated as `cancelled` cannot later be claimed by another companion process.
@@ -61,3 +61,7 @@ claim wins first
 ```
 
 There is no path where the durable task is reported `CANCELLED` while a previously pending resume/project-dispatch action remains claimable.
+
+## v0.2.0
+
+Desktop Stop was removed. Safe cancellation manages Quota Guard state and pending delivery actions; it does not attempt to hard-interrupt an active Codex Desktop turn.
