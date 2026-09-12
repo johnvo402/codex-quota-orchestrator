@@ -13,6 +13,7 @@ const (
 	th32csSnapProcess              = 0x00000002
 	processQueryLimitedInformation = 0x1000
 	stillActive                    = 259
+	errorInvalidParameter          = syscall.Errno(87)
 )
 
 var procGetExitCodeProcess = kernel32.NewProc("GetExitCodeProcess")
@@ -70,7 +71,7 @@ func ProcessAlive(pid int) (bool, error) {
 	}
 	h, err := syscall.OpenProcess(processQueryLimitedInformation, false, uint32(pid))
 	if err != nil {
-		if err == syscall.ERROR_INVALID_PARAMETER {
+		if err == errorInvalidParameter {
 			return false, nil
 		}
 		return false, err
