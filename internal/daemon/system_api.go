@@ -42,7 +42,7 @@ var companionRegistries sync.Map
 
 func registryForServer(s *Server) *companionRegistry {
 	candidate := &companionRegistry{
-		leases:  make(map[string]time.Time),
+		leases:   make(map[string]time.Time),
 		hostPIDs: make(map[int]struct{}),
 	}
 	actual, _ := companionRegistries.LoadOrStore(s, candidate)
