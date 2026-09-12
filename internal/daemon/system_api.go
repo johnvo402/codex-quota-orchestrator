@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"codex-desktop-quota-guard/internal/config"
+	"codex-desktop-quota-guard/internal/observability"
 )
 
 const systemControlHeader = "X-CDQG-Control"
@@ -193,6 +194,12 @@ func companionIdleAtGeneration(registry *companionRegistry, generation uint64) b
 	return registry.seen && len(registry.leases) == 0 && registry.idleGeneration == generation
 }
 
+func (s *Server) markIntentionalShutdown(reason string) {
+	if err := observability.MarkProcessClean(s.service.cfg.DataDir, "daemon", reason); err != nil {
+		s.log.Warn("daemon lifecycle clean-exit marker failed", "reason", reason, "error", err)
+	}
+}
+
 func (s *Server) scheduleCompanionIdleShutdown(registry *companionRegistry, generation uint64, delay time.Duration, reason string) {
 	time.AfterFunc(delay, func() {
 		// Give a just-arriving replacement heartbeat a final opportunity to
@@ -202,6 +209,7 @@ func (s *Server) scheduleCompanionIdleShutdown(registry *companionRegistry, gene
 			return
 		}
 		registry.shutdownOnce.Do(func() {
+			s.markIntentionalShutdown(reason)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.Shutdown(ctx); err != nil {
@@ -221,6 +229,7 @@ func (s *Server) scheduleDaemonShutdown(reason string) {
 			// Give the accepted response a moment to leave the socket before
 			// gracefully closing listeners and SQLite/log handles.
 			time.Sleep(75 * time.Millisecond)
+			s.markIntentionalShutdown(reason)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := s.Shutdown(ctx); err != nil {
