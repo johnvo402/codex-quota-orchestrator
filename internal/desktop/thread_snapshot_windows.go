@@ -140,8 +140,17 @@ func (s *windowsNativeSender) LatestTurn(ctx context.Context, threadID string) (
 		return "", "", errors.New("Codex Desktop read_thread returned no snapshot text")
 	}
 
+	return parseLatestTurnSnapshot(text)
+}
+
+// parseLatestTurnSnapshot accepts both the current codex_app read_thread turn
+// schema (`id`) and the legacy shape (`turnId`). Codex currently serializes a
+// turn summary as {"id": ..., "status": ...}; decoding only turnId silently
+// produced an empty ID and blocked Desktop Stop before UI invocation.
+func parseLatestTurnSnapshot(text string) (string, string, error) {
 	var snapshot struct {
 		Turns []struct {
+			ID     string `json:"id"`
 			TurnID string `json:"turnId"`
 			Status string `json:"status"`
 		} `json:"turns"`
@@ -149,9 +158,17 @@ func (s *windowsNativeSender) LatestTurn(ctx context.Context, threadID string) (
 	if err := json.Unmarshal([]byte(text), &snapshot); err != nil {
 		return "", "", fmt.Errorf("decode Codex Desktop thread snapshot: %w", err)
 	}
-	if len(snapshot.Turns) == 0 || strings.TrimSpace(snapshot.Turns[len(snapshot.Turns)-1].TurnID) == "" {
-		return "", "", errors.New("Codex Desktop thread snapshot has no latest turn")
+	if len(snapshot.Turns) == 0 {
+		return "", "", errors.New("Codex Desktop thread snapshot has no turns")
 	}
+
 	latest := snapshot.Turns[len(snapshot.Turns)-1]
-	return strings.TrimSpace(latest.TurnID), strings.TrimSpace(latest.Status), nil
+	latestID := strings.TrimSpace(latest.ID)
+	if latestID == "" {
+		latestID = strings.TrimSpace(latest.TurnID)
+	}
+	if latestID == "" {
+		return "", "", errors.New("Codex Desktop thread snapshot latest turn has no id")
+	}
+	return latestID, strings.TrimSpace(latest.Status), nil
 }
