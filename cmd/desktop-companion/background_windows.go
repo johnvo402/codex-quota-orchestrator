@@ -20,6 +20,7 @@ type backgroundStartInfo struct {
 	ParentInJob    bool
 	Breakaway      bool
 	Fallback       bool
+	ProbeError     error
 	BreakawayError error
 }
 
@@ -39,6 +40,7 @@ func startBackgroundCommand(cmd *exec.Cmd) (*exec.Cmd, backgroundStartInfo, erro
 	info := backgroundStartInfo{
 		JobSupported: state.Supported,
 		ParentInJob:  state.InJob,
+		ProbeError:   probeErr,
 	}
 	if probeErr != nil {
 		configureBackgroundCommand(cmd, false)
