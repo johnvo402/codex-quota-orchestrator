@@ -207,6 +207,12 @@ func (s *Store) CancelProjectTask(ctx context.Context, id string) (domain.Projec
 }
 
 func (s *Store) ProjectHasBlockingTask(ctx context.Context, projectID string) (bool, error) {
+	// Self-heal a stale queue row before deciding that the project is blocked.
+	// This covers older builds/crash windows where the managed Desktop task was
+	// durably COMPLETED but its corresponding project_tasks row remained RUNNING.
+	if _, err := s.ReconcileCompletedProjectTasks(ctx, projectID); err != nil {
+		return false, err
+	}
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM project_tasks WHERE project_id=? AND state IN ('DISPATCHING','DISPATCHED','RUNNING','NEEDS_REVIEW')`, projectID).Scan(&n)
 	return n > 0, err
