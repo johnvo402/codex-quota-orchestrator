@@ -9,7 +9,7 @@ import (
 )
 
 var (
-	kernel32             = syscall.NewLazyDLL("kernel32.dll")
+	kernel32              = syscall.NewLazyDLL("kernel32.dll")
 	procGetCurrentProcess = kernel32.NewProc("GetCurrentProcess")
 	procIsProcessInJob    = kernel32.NewProc("IsProcessInJob")
 )
