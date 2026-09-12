@@ -159,7 +159,18 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 		log.Info("companion Windows job membership", "inJob", startInfo.ParentInJob)
 	}
 	if startInfo.BreakawayError != nil {
-		log.Warn("CREATE_BREAKAWAY_FROM_JOB failed; using inherited-job fallback", "error", startInfo.BreakawayError)
+		if startInfo.ParentOverride {
+			log.Warn(
+				"CREATE_BREAKAWAY_FROM_JOB failed; daemon launched with Explorer parent override",
+				"error", startInfo.BreakawayError,
+				"explorerPid", startInfo.OverrideParentPID,
+			)
+		} else {
+			log.Warn("CREATE_BREAKAWAY_FROM_JOB failed", "error", startInfo.BreakawayError)
+		}
+	}
+	if startInfo.ParentOverrideError != nil {
+		log.Warn("Explorer parent override failed", "error", startInfo.ParentOverrideError)
 	}
 	if startErr != nil {
 		if crashFile != nil {
@@ -177,7 +188,8 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 		"stderr", crashPath,
 		"parentInJob", startInfo.ParentInJob,
 		"breakaway", startInfo.Breakaway,
-		"fallback", startInfo.Fallback,
+		"parentOverride", startInfo.ParentOverride,
+		"overrideParentPid", startInfo.OverrideParentPID,
 	)
 	_ = cmd.Process.Release()
 	if crashFile != nil {
@@ -185,12 +197,25 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 	}
 	for i := 0; i < 10; i++ {
 		if daemonHealthy(cfg) {
-			log.Info("quota daemon auto-started with Codex Desktop", "pid", pid, "breakaway", startInfo.Breakaway)
+			log.Info(
+				"quota daemon auto-started with Codex Desktop",
+				"pid", pid,
+				"breakaway", startInfo.Breakaway,
+				"parentOverride", startInfo.ParentOverride,
+				"overrideParentPid", startInfo.OverrideParentPID,
+			)
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	log.Warn("quota daemon was started but did not become healthy yet", "pid", pid, "stderr", crashPath, "breakaway", startInfo.Breakaway)
+	log.Warn(
+		"quota daemon was started but did not become healthy yet",
+		"pid", pid,
+		"stderr", crashPath,
+		"breakaway", startInfo.Breakaway,
+		"parentOverride", startInfo.ParentOverride,
+		"overrideParentPid", startInfo.OverrideParentPID,
+	)
 }
 
 func openDaemonCrashLog(cfg config.Config) (*os.File, string, error) {
