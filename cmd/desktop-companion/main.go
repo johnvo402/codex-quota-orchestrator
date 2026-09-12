@@ -38,7 +38,7 @@ func main() {
 		defer logCloser.Close()
 	}
 
-	log.Info("Desktop companion started")
+	log.Info("Desktop companion started", "pid", os.Getpid(), "parentPid", os.Getppid())
 	// Preserve the proven v0.1.5 startup ordering: make sure the daemon exists
 	// before entering the MCP stdio loop, then let the heartbeat own recovery.
 	ensureDaemon(cfg, log)
@@ -142,21 +142,55 @@ func ensureDaemon(cfg config.Config, log *slog.Logger) {
 	cmd := exec.Command(daemon, "daemon")
 	configureBackgroundCommand(cmd)
 	cmd.Stdout = nil
-	cmd.Stderr = nil
 	cmd.Stdin = nil
+
+	crashFile, crashPath, crashErr := openDaemonCrashLog(cfg)
+	if crashErr != nil {
+		log.Warn("cannot open daemon crash log", "error", crashErr)
+		cmd.Stderr = nil
+	} else {
+		cmd.Stderr = crashFile
+	}
+
 	if err := cmd.Start(); err != nil {
+		if crashFile != nil {
+			_ = crashFile.Close()
+		}
 		log.Warn("failed to auto-start quota daemon", "error", err)
 		return
 	}
+	pid := cmd.Process.Pid
+	log.Info("quota daemon process spawned", "pid", pid, "parentPid", os.Getpid(), "stderr", crashPath)
 	_ = cmd.Process.Release()
+	if crashFile != nil {
+		_ = crashFile.Close()
+	}
 	for i := 0; i < 10; i++ {
 		if daemonHealthy(cfg) {
-			log.Info("quota daemon auto-started with Codex Desktop")
+			log.Info("quota daemon auto-started with Codex Desktop", "pid", pid)
 			return
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
-	log.Warn("quota daemon was started but did not become healthy yet")
+	log.Warn("quota daemon was started but did not become healthy yet", "pid", pid, "stderr", crashPath)
+}
+
+func openDaemonCrashLog(cfg config.Config) (*os.File, string, error) {
+	if err := os.MkdirAll(observability.LogDir(cfg.DataDir), 0o700); err != nil {
+		return nil, "", err
+	}
+	path := observability.LogPath(cfg.DataDir, "daemon-crash")
+	const maxCrashLogBytes = int64(2 * 1024 * 1024)
+	if info, err := os.Stat(path); err == nil && info.Size() >= maxCrashLogBytes {
+		_ = os.Remove(path + ".1")
+		_ = os.Rename(path, path+".1")
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, path, err
+	}
+	_, _ = fmt.Fprintf(f, "\n=== daemon spawn requested at %s by companion pid=%d ===\n", time.Now().UTC().Format(time.RFC3339Nano), os.Getpid())
+	return f, path, nil
 }
 
 func daemonHealthy(cfg config.Config) bool {
