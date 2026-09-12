@@ -32,7 +32,7 @@ type companionRegistry struct {
 	mu                  sync.Mutex
 	seen                bool
 	leases              map[string]time.Time
-	hostPIDs             map[int]struct{}
+	hostPIDs            map[int]struct{}
 	idleGeneration      uint64
 	hostWatchGeneration uint64
 	shutdownOnce        sync.Once
