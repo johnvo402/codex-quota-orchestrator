@@ -1,91 +1,163 @@
 # Codex Desktop Quota Guard
 
-Desktop-first quota-aware orchestration and local task management for Codex. Codex Desktop remains the owner and UI for real work; the guard monitors quota, persists tasks and checkpoints, cooperatively pauses at safe boundaries, resumes through Codex Desktop's native tools pipe, and manages local project queues.
+Desktop-first quota-aware orchestration and local task management for Codex.
 
-## Highlights
+Codex Desktop remains the owner and UI for real work. The guard monitors Codex quota, persists task/checkpoint state, cooperatively pauses work at safe boundaries, resumes through the native Desktop pipe, and provides a local dashboard with project queues.
 
-- Separate 5-hour and weekly quota windows with independent resume thresholds.
-- Local Go daemon backed by SQLite.
-- Codex Desktop MCP companion captures the current Desktop `threadId` and starts/stops the daemon with Codex Desktop.
-- Cooperative quota pause, checkpoint, and resume.
-- Native Windows Desktop delivery through `codex_app.send_message_to_thread`.
-- Crash-safe action claiming with `NEEDS_REVIEW` for uncertain external side effects.
-- Projects/workspaces with sequential queues and `AUTO`, `MANUAL`, and `PAUSED` queue modes.
-- Queue self-healing: if a managed Desktop task is already `COMPLETED` but its queue row was left `RUNNING` by an older build/crash window, reconciliation repairs the stale row and allows the next queued task to advance.
-- Atomic drag-and-drop queue ordering.
-- Embedded dashboard, settings, diagnostics, logs, and Desktop Stop page.
-- Windows installer/uninstaller and `orch` CLI on PATH.
+## Current capabilities
+
+- Separate 5-hour and weekly Codex quota windows with independent resume thresholds.
+- Local Go daemon with SQLite persistence.
+- Codex Desktop MCP companion captures the current Desktop `threadId`.
+- Cooperative pause/checkpoint/resume flow.
+- Native Windows Desktop `send_message_to_thread` delivery.
+- Crash-safe action claiming and `NEEDS_REVIEW` recovery.
+- Project/workspace grouping and sequential project task queues.
+- Per-project queue modes: `AUTO`, `MANUAL`, and `PAUSED`.
+- Atomic drag-and-drop ordering for queued project tasks.
+- Embedded local dashboard with task/project management, Settings, diagnostics, and Desktop Stop.
+- Shared persisted configuration for daemon, companion, and CLI.
+- Graceful daemon restart from Settings or `orch restart`.
+- Graceful daemon shutdown with `orch stop`.
+- `orch` CLI installed on the current user's PATH.
+- Inno Setup based Windows installer/uninstaller.
+- Desktop-bound daemon lifecycle: the companion starts the daemon on demand and the daemon exits after the last active companion disconnects or its lease expires.
+- Windows Desktop Stop with exact `threadId` / `turnId` checks and backend interruption verification.
 
 ## Install on Windows
 
-Install the latest `CodexQuotaGuardSetup-<version>.exe` from GitHub Releases.
+Prerequisites:
 
-The default install directory is:
+- Windows 10/11 x64
+- Codex Desktop
+- Codex CLI installed and logged in
+
+Download the latest installer from GitHub Releases:
+
+```text
+CodexQuotaGuardSetup-vX.Y.Z.exe
+```
+
+Double-click it and complete the normal Windows setup wizard. No PowerShell installer or execution-policy change is required.
+
+Setup installs under:
 
 ```text
 %LOCALAPPDATA%\CodexQuotaGuard\
+├─ unins000.exe
+├─ config.example.json
+├─ docs\
+└─ bin\
+   ├─ orchestrator.exe
+   ├─ orchestrator-daemon.exe
+   ├─ orch.exe
+   └─ desktop-companion.exe
 ```
 
-Runtime data is stored under:
-
-```text
-%USERPROFILE%\.codex-desktop-quota-guard\
-```
-
-After install, fully quit and reopen Codex Desktop so the MCP companion starts with the current Desktop session.
-
-Useful commands:
+The installer handles normal application installation concerns such as files, User PATH, shortcuts, update compatibility, and uninstall registration. Codex-specific bootstrap is delegated to:
 
 ```powershell
-orch version
-orch doctor
+orch setup
+```
+
+During installation that command registers the MCP companion, manages the Quota Guard block in `~/.codex/AGENTS.md`, and initializes the relay when needed.
+
+After installation, fully quit and reopen Codex Desktop once, then open a new terminal and run:
+
+```powershell
 orch status
 orch ui
-orch logs --follow
 ```
 
-## Runtime lifecycle
+## Daemon lifecycle
 
-The daemon is Desktop-bound by default:
+The daemon no longer runs permanently from the Windows Run key.
+
+Normal lifecycle:
 
 ```text
-Codex Desktop opens
-  -> desktop-companion.exe starts
-  -> companion ensures orchestrator-daemon.exe is running
-  -> companion heartbeat keeps the daemon alive
-
-Codex Desktop fully quits
-  -> companion disconnects
-  -> daemon exits after the companion lease expires
+Open Codex Desktop
+   ↓
+desktop-companion.exe starts
+   ↓
+companion starts orchestrator-daemon.exe if needed
+   ↓
+companion heartbeat keeps the daemon alive
+   ↓
+Full Quit Codex Desktop
+   ↓
+companion disconnects / lease expires
+   ↓
+orchestrator-daemon.exe gracefully exits
 ```
 
-This avoids leaving `orchestrator-daemon.exe` running indefinitely after a full Codex Desktop quit and makes in-place upgrades reliable. The installer also asks the existing daemon to stop before replacing binaries.
+Multiple companion instances are supported. Closing one companion does not stop the daemon while another valid lease remains active.
 
-## Dashboard
+A clean companion exit releases its lease immediately. If Codex or the companion crashes, the lease expires after the heartbeat grace period and the daemon shuts down automatically.
 
-Default local dashboard:
+## Upgrade / repair
+
+Download the newer installer and run it again:
 
 ```text
-http://127.0.0.1:47631/
+CodexQuotaGuardSetup-vX.Y.Z.exe
 ```
 
-Pages:
+Before replacing installed binaries, the installer stops the currently installed daemon so `orchestrator-daemon.exe` is not left locked in Task Manager.
 
-- `/` — overview and managed Desktop tasks
-- `/queue.html` — project queues
-- `/stop.html` — guarded Desktop Stop for active managed turns
-- `/settings.html` — shared runtime settings
-- `/diagnostics.html` — system diagnostics
-
-You can also run:
+Current releases use the graceful CLI path:
 
 ```powershell
-orch ui
+orch stop
 ```
 
-## CLI
+For upgrades from releases that predate `orch stop`, the installer contains a narrowly scoped compatibility fallback that verifies the recorded daemon runtime identity before terminating that legacy process.
+
+Runtime state is outside the installation directory and is preserved across upgrade/repair:
 
 ```text
+~\.codex-desktop-quota-guard\
+```
+
+including SQLite task history, relay state, logs, and the shared `config.json` when it exists.
+
+If Codex integration needs repair later:
+
+```powershell
+orch setup
+```
+
+## Uninstall
+
+Use:
+
+```text
+Settings
+→ Apps
+→ Installed apps
+→ Codex Desktop Quota Guard
+→ Uninstall
+```
+
+or run:
+
+```text
+%LOCALAPPDATA%\CodexQuotaGuard\unins000.exe
+```
+
+The uninstaller stops the daemon before removing application files and runs:
+
+```powershell
+orch teardown
+```
+
+which removes the `desktop-quota-guard` MCP registration and the managed Quota Guard block from `AGENTS.md`.
+
+Runtime state under `~\.codex-desktop-quota-guard\` is intentionally preserved so reinstall/upgrade does not destroy task history or settings.
+
+## Everyday commands
+
+```powershell
 orch setup
 orch teardown
 orch config show
@@ -101,7 +173,161 @@ orch doctor
 orch version
 ```
 
-Recovery for uncertain managed tasks:
+Local UI:
+
+```text
+Dashboard:    http://127.0.0.1:47631/
+Task Queue:   http://127.0.0.1:47631/queue.html
+Settings:     http://127.0.0.1:47631/settings.html
+Diagnostics:  http://127.0.0.1:47631/diagnostics.html
+Desktop Stop: http://127.0.0.1:47631/stop.html
+```
+
+## Shared configuration
+
+With no explicit `--config` or `CDQG_CONFIG`, the daemon, Desktop companion, and `orch` CLI resolve the same optional file:
+
+```text
+~\.codex-desktop-quota-guard\config.json
+```
+
+Existing installs do not require this file. Built-in defaults remain active until Settings is saved for the first time.
+
+The dashboard exposes:
+
+```text
+Settings
+├─ hard / soft pause thresholds
+├─ 5h resume threshold
+├─ weekly resume threshold
+├─ quota poll interval
+├─ companion poll interval
+├─ Codex request timeout
+├─ global project queue auto-dispatch switch
+└─ listen address
+```
+
+Default policy:
+
+```text
+hard threshold:    5%
+soft threshold:   10%
+5h resume:        20%
+weekly resume:     5%
+quota poll:       60s
+companion poll:    5s
+auto dispatch:   true
+project queue:   AUTO
+```
+
+Hard and soft thresholds apply to both quota windows. Resume requires every available window to be above the soft pause boundary and to satisfy its own resume threshold.
+
+A legacy config containing only:
+
+```json
+{
+  "resumeThresholdPercent": 20
+}
+```
+
+is still accepted. Newly saved configs use `fiveHourResumeThresholdPercent` and `weeklyResumeThresholdPercent`.
+
+Settings are persisted through:
+
+```text
+GET /v1/settings
+PUT /v1/settings
+```
+
+Writes use a temporary file and replace `config.json` only after the new content is fully written.
+
+When saved settings differ from the running daemon, Settings exposes **Restart daemon**. The same operation is available from the CLI:
+
+```powershell
+orch restart
+```
+
+Restart is a graceful handoff: a hidden replacement waits for the predecessor health endpoint to disappear before binding with the new saved configuration.
+
+If `companionPollSeconds` changes, fully reopen Codex Desktop as well so `desktop-companion.exe` reloads the shared configuration.
+
+Explicit configuration remains supported:
+
+```powershell
+orch status --config C:\path\to\config.json
+orch restart --config C:\path\to\config.json
+orch stop --config C:\path\to\config.json
+orch config --config C:\path\to\config.json show
+```
+
+`CDQG_CONFIG`, `CDQG_DATA_DIR`, and `CDQG_CODEX_COMMAND` remain available for advanced/development overrides.
+
+## Sequential project task queue
+
+Each project has an independent sequential queue and its own queue mode:
+
+```text
+AUTO    Automatically dispatch the next queued item after successful completion.
+MANUAL  Keep queued work waiting until Start now is pressed.
+PAUSED  Block all new queue dispatch for the project.
+```
+
+Switching a project to `PAUSED` does not interrupt work already running; it only prevents new queue items from starting. `AUTO` also requires the global `autoDispatch` setting to be enabled.
+
+Queue safety rules:
+
+- at most one queued item runs per project;
+- only the first `QUEUED` item can be started manually;
+- automatic advancement happens only for `AUTO` projects;
+- the queue advances only after the previous managed task is `COMPLETED`;
+- `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` stop automatic advancement;
+- low quota keeps future work queued, including manual Start requests;
+- `PAUSED` blocks all new queue dispatch;
+- queued positions are normalized after reorder, cancel, delete, and dispatch;
+- stale/partial reorder requests are rejected;
+- uncertain delivery becomes `NEEDS_REVIEW` instead of being blindly retried.
+
+Lifecycle:
+
+```text
+QUEUED -> DISPATCHING -> RUNNING -> COMPLETED
+                         |
+                         +-> NEEDS_REVIEW
+```
+
+## Desktop Stop
+
+Desktop Stop is a separate manual Windows-only path for a managed task that is currently `RUNNING`.
+
+Flow:
+
+```text
+Dashboard Stop
+  ↓
+queue durable stop(threadId, expectedTurnId)
+  ↓
+claim validates the same RUNNING task + turn
+  ↓
+native read_thread verifies the exact turn is inProgress
+  ↓
+UI Automation invokes the unique visible Stop control
+  ↓
+read_thread verifies the same turn became interrupted
+  ↓
+verified: CANCELLED
+```
+
+A successful Windows accessibility call is **not** considered proof that the turn stopped. The guard reads the Desktop thread back and only records `CANCELLED` when the exact expected turn reports `status=interrupted`.
+
+If `InvokePattern` is acknowledged but the exact same turn stays `inProgress`, Quota Guard can make one guarded physical-click fallback after re-verifying the same thread/turn and reacquiring the unique Stop button. If interruption is still not confirmed, the Stop action becomes `uncertain` and the task moves to `NEEDS_REVIEW`; it is never blindly clicked again.
+
+This matters because some Codex Desktop Windows builds have had cases where the visible Stop control itself does not actually interrupt the backend turn.
+
+See [`docs/DESKTOP_STOP.md`](docs/DESKTOP_STOP.md) for the detailed safety model.
+
+## Manual recovery
+
+If a managed task becomes `NEEDS_REVIEW`, inspect the destination Desktop thread first, then use:
 
 ```powershell
 orch recover --thread <threadId> --resolution retry
@@ -109,225 +335,71 @@ orch recover --thread <threadId> --resolution running
 orch recover --thread <threadId> --resolution cancel
 ```
 
-## Quota policy
+Use `retry` only when you confirmed the previous continuation or Stop side effect did not already produce the intended result.
 
-Default settings:
+## Runtime logs and diagnostics
 
-```text
-hard threshold:       5%
-soft threshold:       10%
-5-hour resume:        20%
-weekly resume:        5%
-quota poll:           60s
-companion poll:       5s
-autoDispatch:         true
-project queue mode:   AUTO
-```
-
-The orchestrator never bypasses or spoofs Codex quota. It only decides whether local managed work should continue, pause, or resume based on the quota reported by Codex.
-
-## Managed task lifecycle
+Structured JSON Lines logs are written under:
 
 ```text
-RUNNING
-  -> PAUSE_REQUESTED
-  -> PAUSED_QUOTA
-  -> RESUME_QUEUED
-  -> RUNNING
-  -> COMPLETED
+~\.codex-desktop-quota-guard\logs\
+├─ daemon.log
+└─ companion.log
 ```
 
-`NEEDS_REVIEW` is the fail-closed state for uncertain Desktop side effects.
-
-The semantic managed-task state is deliberately separate from durable action delivery state.
-
-## Durable Desktop actions
-
-External Desktop side effects use a crash-safe action state machine:
-
-```text
-pending
-  -> delivering
-  -> done
-     failed
-     uncertain
-```
-
-`pending` is retry-safe. If a process dies while an action is `delivering`, the result is not guessed; recovery marks it `uncertain`, and the affected task moves to `NEEDS_REVIEW` when appropriate.
-
-## Project queues
-
-A project queue item follows:
-
-```text
-QUEUED
-  -> DISPATCHING
-  -> RUNNING
-  -> COMPLETED
-```
-
-`NEEDS_REVIEW` is a side path when delivery may have happened but cannot be proven.
-
-Queue safety rules:
-
-- Only the first queued item can start manually.
-- At most one active item is allowed per project.
-- `AUTO` advances automatically when global `autoDispatch` is enabled.
-- `MANUAL` waits for an explicit Start action.
-- `PAUSED` blocks dispatch.
-- The queue advances only after successful completion.
-- `FAILED`, `CANCELLED`, and `NEEDS_REVIEW` do not silently advance the queue.
-- Low quota blocks future starts.
-- Stale queue ordering updates are rejected.
-- A stale queue row left `RUNNING` while its linked managed Desktop task is already `COMPLETED` is repaired during blocker reconciliation so it cannot deadlock the project forever.
-
-## Desktop Stop
-
-Desktop Stop is a narrow Windows-only safety feature for an active managed Codex Desktop turn.
-
-The flow is:
-
-```text
-Dashboard Stop
-  -> durable stop action(threadId, expectedTurnId)
-  -> exact task/turn validation in SQLite
-  -> navigate Codex Desktop to the target thread
-  -> read the latest Desktop turn through the native pipe
-  -> verify latest turnId == expectedTurnId and status == inProgress
-  -> invoke the unique visible Stop control
-  -> verify the backend turn becomes interrupted
-```
-
-On Chromium/Electron builds where accessibility `InvokePattern` reports success but does not actually interrupt the turn, the Windows implementation may use one guarded physical-click fallback. It still fails closed: it requires one visible Codex window, one allow-listed Stop button, an exact expected turn, a valid clickable point, and a fresh native turn check.
-
-The Stop page follows the exact durable `actionId` returned by the daemon. It distinguishes `pending`, `delivering`, `done`, `failed`, `uncertain`, and `cancelled` instead of inferring the outcome only from task state. This makes failures such as native-pipe problems, stale turns, or a missing Stop button visible directly in the UI.
-
-If Stop may have been invoked but interruption cannot be confirmed, the action becomes `uncertain` and the managed task moves to `NEEDS_REVIEW`. The guard never blindly clicks Stop again.
-
-## Desktop-first architecture
-
-The current design intentionally does not run user work through a second orchestrator-owned Codex app-server.
-
-```text
-Codex Desktop
-  -> desktop-companion.exe (MCP)
-  -> local daemon HTTP API
-  -> SQLite durable state
-
-Desktop-native operations
-  -> Codex Desktop native tools pipe
-  -> codex_app tools
-```
-
-Codex Desktop remains the owner of human-facing threads and turns. The guard observes and coordinates them instead of becoming a second writer.
-
-Quota reads use a short-lived Codex app-server client only for account/rate-limit information.
-
-## Native Desktop delivery
-
-On Windows, the companion discovers the Codex Desktop tools pipe from one of:
-
-```text
-CODEX_APP_TOOLS_PIPE_PATH
-CDQG_DESKTOP_NATIVE_PIPE
-parent Codex app-server command line
-```
-
-Native requests use the persistent relay executor thread and can call tools such as:
-
-```text
-codex_app.list_threads
-codex_app.read_thread
-codex_app.navigate_to_codex_page
-codex_app.send_message_to_thread
-```
-
-The relay executor is bootstrap infrastructure; it is not the target user thread.
-
-## Codex CLI resolution on Windows
-
-The guard does not trust a `codex` executable found only through the current working directory. On Windows, `orch doctor`, setup, and quota sampling resolve Codex from an absolute configured path or absolute PATH entries and support the usual executable/script extensions such as `.exe`, `.cmd`, and `.bat`.
-
-This avoids Go's `exec.ErrDot` behavior and prevents a local `codex.exe`/`codex.cmd` in the working directory from shadowing the real Codex CLI.
-
-## Diagnostics
-
-Run:
+Useful commands:
 
 ```powershell
+orch logs
+orch logs --tail 200
+orch logs --level error
+orch logs --component daemon
+orch logs --component companion
+orch logs --follow
 orch doctor
 ```
 
-Expected healthy checks include the Codex CLI, local data directory, SQLite state, quota provider, daemon/runtime discovery, and Desktop integration where available.
+The diagnostics dashboard checks configuration, daemon/runtime metadata, SQLite and queue integrity, companion installation, Codex CLI, MCP registration, and quota-provider access. The native Desktop pipe remains a Desktop-process check and is reported as `UNKNOWN` from the standalone daemon/CLI diagnostics path.
 
-For live logs:
-
-```powershell
-orch logs --follow
-```
-
-The most useful files under the runtime data directory are typically:
+## Project layout
 
 ```text
-daemon.log
-companion.log
-state.db
-config.json
-relay.json
+cmd/
+  orchestrator/       daemon + CLI + Codex bootstrap/config commands
+  desktop-companion/  MCP server launched by Codex Desktop
+installer/
+  CodexQuotaGuard.iss Inno Setup definition
+internal/
+  codexquota/         short-lived Codex app-server quota client
+  config/             shared config resolution, validation, persistence
+  daemon/             monitor + API + queue scheduler
+  desktop/            native Desktop delivery + Windows Stop automation
+  diagnostics/        doctor/dashboard health checks
+  mcpserver/          MCP tools + action delivery
+  observability/      structured runtime logging and log reader
+  store/              SQLite persistence
+  domain/             task/project/queue models
+  quota/              policy
+  webui/              embedded dashboard, queue, diagnostics, Settings, Stop UI
+.github/workflows/
+  ci.yml
+  release.yml
+  tag-release.yml
 ```
 
-## Configuration
+Legacy PowerShell scripts may remain in the source tree for development/migration support, but they are not the canonical release install/uninstall flow.
 
-Default config path:
+## Docs
 
-```text
-%USERPROFILE%\.codex-desktop-quota-guard\config.json
-```
+- `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, daemon lifecycle, configuration, and uninstall.
+- `docs/DESKTOP_STOP.md` — verified Windows Desktop Stop flow and safety rules.
+- `docs/TROUBLESHOOTING.md` — daemon, native delivery, and recovery diagnostics.
+- `docs/DIAGNOSTICS.md` — doctor v2 and system diagnostics dashboard.
+- `docs/LOGGING.md` — structured daemon/companion logs and `orch logs`.
+- `docs/ARCHITECTURE.md` — Desktop-first architecture.
 
-Inspect it with:
+## Important limitations
 
-```powershell
-orch config show
-orch config path
-orch config validate
-```
+Quota-driven pause remains cooperative at model/tool safe boundaries.
 
-See `config.example.json` for the supported fields.
-
-## Development
-
-Requirements:
-
-- Go 1.23+
-- Windows for native Desktop Stop and installer validation
-- Inno Setup 6 for local installer builds
-
-Run tests:
-
-```bash
-go test ./...
-go vet ./...
-```
-
-Windows CI additionally builds:
-
-```text
-orchestrator.exe
-orchestrator-daemon.exe
-desktop-companion.exe
-CodexQuotaGuardSetup.exe
-```
-
-## Safety principles
-
-- Do not bypass Codex quota.
-- Do not guess whether an external Desktop side effect happened.
-- Claim durable actions before delivery.
-- Never blindly retry an uncertain Stop or send.
-- Verify exact thread/turn identity before destructive Desktop actions.
-- Keep Codex Desktop as the authoritative owner of user work.
-- Prefer `NEEDS_REVIEW` over an unsafe automatic retry.
-
-## More documentation
-
-See the `docs/` directory for architecture, Windows setup, diagnostics, logging, recovery, crash recovery, safe cancellation, continued-chat behavior, and Desktop Stop details.
+Desktop Stop is Windows-only and depends on Codex Desktop's own visible Stop path. Quota Guard verifies whether the backend turn actually became `interrupted`, but it cannot force a Desktop-owned backend turn through a stable public hard-interrupt API when the current Codex Desktop build's own Stop behavior is broken. In that case the action is reported as uncertain / `NEEDS_REVIEW` instead of false success.
