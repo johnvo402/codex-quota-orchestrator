@@ -5,12 +5,14 @@ package main
 import "os/exec"
 
 type backgroundStartInfo struct {
-	JobSupported   bool
-	ParentInJob    bool
-	Breakaway      bool
-	Fallback       bool
-	ProbeError     error
-	BreakawayError error
+	JobSupported        bool
+	ParentInJob         bool
+	Breakaway           bool
+	ParentOverride      bool
+	OverrideParentPID   int
+	ProbeError          error
+	BreakawayError      error
+	ParentOverrideError error
 }
 
 func configureBackgroundCommand(cmd *exec.Cmd, breakaway bool) {}
