@@ -239,6 +239,26 @@ func (s *Server) actions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) actionRoute(w http.ResponseWriter, r *http.Request) {
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/actions/"), "/")
+	if path != "" && !strings.Contains(path, "/") {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		id, err := strconv.ParseInt(path, 10, 64)
+		if err != nil {
+			httpErr(w, http.StatusBadRequest, err)
+			return
+		}
+		action, err := s.store.GetActionStatus(r.Context(), id)
+		if err != nil {
+			httpErr(w, statusForStoreErr(err), err)
+			return
+		}
+		jsonOut(w, http.StatusOK, action)
+		return
+	}
+
 	switch {
 	case strings.HasSuffix(r.URL.Path, "/claim"):
 		s.actionClaim(w, r)
