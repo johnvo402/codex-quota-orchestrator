@@ -9,6 +9,7 @@ type backgroundStartInfo struct {
 	ParentInJob    bool
 	Breakaway      bool
 	Fallback       bool
+	ProbeError     error
 	BreakawayError error
 }
 
