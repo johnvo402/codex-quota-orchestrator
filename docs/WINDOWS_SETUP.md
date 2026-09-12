@@ -109,7 +109,7 @@ daemon gracefully exits
 
 Multiple companion instances are safe. One companion exiting does not stop the daemon while another active lease remains.
 
-A clean companion shutdown releases its lease immediately. If Codex Desktop or the companion crashes, the missing heartbeat expires after the grace period and the daemon exits automatically.
+If Codex Desktop or the companion crashes, the missing heartbeat expires after the grace period and the daemon exits automatically.
 
 ## Upgrade / repair
 
@@ -139,6 +139,14 @@ To repair only the Codex integration later, run:
 orch setup
 ```
 
+## v0.2.0 Desktop Stop removal
+
+The experimental Desktop Stop feature was removed in v0.2.0. There is no `/stop.html` page and Quota Guard no longer uses Windows UI Automation to press Codex Desktop's Stop control.
+
+Quota-driven pause remains cooperative. If an active Codex Desktop turn must be interrupted immediately, use Codex Desktop's own Stop control directly.
+
+During upgrade, pending legacy Stop actions are cancelled. A legacy Stop action that was already being delivered is retained as uncertain and the linked nonterminal task is moved to `NEEDS_REVIEW` rather than assuming what happened.
+
 ## Everyday commands
 
 ```powershell
@@ -164,7 +172,6 @@ Dashboard:    http://127.0.0.1:47631/
 Task Queue:   http://127.0.0.1:47631/queue.html
 Settings:     http://127.0.0.1:47631/settings.html
 Diagnostics:  http://127.0.0.1:47631/diagnostics.html
-Desktop Stop: http://127.0.0.1:47631/stop.html
 ```
 
 If `orch` is not recognized immediately after installation, open a new terminal so it receives the updated User PATH.
@@ -204,20 +211,6 @@ orch stop
 When Codex Desktop is still open, its companion may start the daemon again because the guard is still needed. A full Codex Desktop quit removes the companion leases and leaves the daemon stopped.
 
 If `companionPollSeconds` changes, fully reopen Codex Desktop after the daemon restart because `desktop-companion.exe` is a separate Codex-managed process.
-
-## Desktop Stop
-
-`Desktop Stop` is a Windows-only control for a managed task that is currently `RUNNING`. It does not send a chat prompt.
-
-The guard records the exact `threadId` and `turnId`, navigates Codex Desktop to that thread, confirms through native `read_thread` that the same turn is still `inProgress`, then operates the unique visible Stop control.
-
-An accessibility `InvokePattern` call alone is not considered success. Quota Guard reads the thread back and only marks the managed task `CANCELLED` after the exact expected turn reports `status=interrupted`.
-
-If the first accessibility invocation leaves the same turn `inProgress`, Quota Guard can perform one guarded physical-click fallback after re-verifying the exact thread/turn and reacquiring the unique Stop button. The cursor is restored afterward.
-
-If a Stop side effect was attempted but backend interruption cannot be confirmed, the durable action becomes `uncertain` and the managed task becomes `NEEDS_REVIEW`. It is never blindly clicked again.
-
-See [`DESKTOP_STOP.md`](DESKTOP_STOP.md) for the detailed safety model.
 
 ## Uninstall
 
@@ -334,4 +327,4 @@ Legacy PowerShell scripts may remain in the repository for development and migra
 
 Quota-driven pause remains cooperative at model/tool safe boundaries.
 
-Desktop Stop depends on Codex Desktop's own Windows Stop path. The guard verifies the backend turn afterward, but if the current Codex Desktop build's Stop control itself is broken, Quota Guard cannot safely force a Desktop-owned turn through a separate competing app-server writer. It reports `NEEDS_REVIEW` instead of false success.
+v0.2.0 does not attempt to hard-interrupt Desktop-owned turns. Use Codex Desktop itself when an immediate stop is required.

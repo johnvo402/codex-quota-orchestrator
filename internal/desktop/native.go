@@ -54,7 +54,6 @@ type NativeSender interface {
 	Diagnostics() NativeDiagnostics
 	Probe(context.Context) error
 	SendMessage(context.Context, string, string) error
-	LatestTurn(context.Context, string) (turnID string, status string, err error)
 }
 
 func NewNativeSender(executorThreadID string) NativeSender {

@@ -15,14 +15,21 @@ Codex Desktop remains the owner and UI for real work. The guard monitors Codex q
 - Project/workspace grouping and sequential project task queues.
 - Per-project queue modes: `AUTO`, `MANUAL`, and `PAUSED`.
 - Atomic drag-and-drop ordering for queued project tasks.
-- Embedded local dashboard with task/project management, Settings, diagnostics, and Desktop Stop.
+- Embedded local dashboard with task/project management, Settings, and diagnostics.
 - Shared persisted configuration for daemon, companion, and CLI.
 - Graceful daemon restart from Settings or `orch restart`.
 - Graceful daemon shutdown with `orch stop`.
 - `orch` CLI installed on the current user's PATH.
 - Inno Setup based Windows installer/uninstaller.
 - Desktop-bound daemon lifecycle: the companion starts the daemon on demand and the daemon exits after the last active companion disconnects or its lease expires.
-- Windows Desktop Stop with exact `threadId` / `turnId` checks and backend interruption verification.
+
+## v0.2.0 behavior change
+
+The experimental **Desktop Stop** feature was removed in v0.2.0. Quota Guard no longer exposes `/stop.html`, no dashboard hard-stop action is created, and no Windows UI Automation is used to click Codex Desktop's Stop control.
+
+Quota management remains cooperative: request pause, checkpoint at a safe boundary, finish the current turn, and resume later when quota allows. If an active turn must be interrupted immediately, use Codex Desktop's own Stop control directly.
+
+When upgrading an older database, pending legacy Desktop Stop actions are cancelled. A legacy Stop action that had already entered delivery is preserved as `uncertain` and its nonterminal managed task is moved to `NEEDS_REVIEW` rather than guessing whether the old side effect occurred.
 
 ## Install on Windows
 
@@ -71,7 +78,7 @@ orch ui
 
 ## Daemon lifecycle
 
-The daemon no longer runs permanently from the Windows Run key.
+The daemon does not run permanently from the Windows Run key.
 
 Normal lifecycle:
 
@@ -93,7 +100,7 @@ orchestrator-daemon.exe gracefully exits
 
 Multiple companion instances are supported. Closing one companion does not stop the daemon while another valid lease remains active.
 
-A clean companion exit releases its lease immediately. If Codex or the companion crashes, the lease expires after the heartbeat grace period and the daemon shuts down automatically.
+If Codex or the companion crashes, the lease expires after the heartbeat grace period and the daemon shuts down automatically.
 
 ## Upgrade / repair
 
@@ -180,7 +187,6 @@ Dashboard:    http://127.0.0.1:47631/
 Task Queue:   http://127.0.0.1:47631/queue.html
 Settings:     http://127.0.0.1:47631/settings.html
 Diagnostics:  http://127.0.0.1:47631/diagnostics.html
-Desktop Stop: http://127.0.0.1:47631/stop.html
 ```
 
 ## Shared configuration
@@ -295,36 +301,6 @@ QUEUED -> DISPATCHING -> RUNNING -> COMPLETED
                          +-> NEEDS_REVIEW
 ```
 
-## Desktop Stop
-
-Desktop Stop is a separate manual Windows-only path for a managed task that is currently `RUNNING`.
-
-Flow:
-
-```text
-Dashboard Stop
-  ↓
-queue durable stop(threadId, expectedTurnId)
-  ↓
-claim validates the same RUNNING task + turn
-  ↓
-native read_thread verifies the exact turn is inProgress
-  ↓
-UI Automation invokes the unique visible Stop control
-  ↓
-read_thread verifies the same turn became interrupted
-  ↓
-verified: CANCELLED
-```
-
-A successful Windows accessibility call is **not** considered proof that the turn stopped. The guard reads the Desktop thread back and only records `CANCELLED` when the exact expected turn reports `status=interrupted`.
-
-If `InvokePattern` is acknowledged but the exact same turn stays `inProgress`, Quota Guard can make one guarded physical-click fallback after re-verifying the same thread/turn and reacquiring the unique Stop button. If interruption is still not confirmed, the Stop action becomes `uncertain` and the task moves to `NEEDS_REVIEW`; it is never blindly clicked again.
-
-This matters because some Codex Desktop Windows builds have had cases where the visible Stop control itself does not actually interrupt the backend turn.
-
-See [`docs/DESKTOP_STOP.md`](docs/DESKTOP_STOP.md) for the detailed safety model.
-
 ## Manual recovery
 
 If a managed task becomes `NEEDS_REVIEW`, inspect the destination Desktop thread first, then use:
@@ -335,7 +311,7 @@ orch recover --thread <threadId> --resolution running
 orch recover --thread <threadId> --resolution cancel
 ```
 
-Use `retry` only when you confirmed the previous continuation or Stop side effect did not already produce the intended result.
+Use `retry` only when you confirmed the previous continuation did not already arrive in the Desktop thread.
 
 ## Runtime logs and diagnostics
 
@@ -373,14 +349,14 @@ internal/
   codexquota/         short-lived Codex app-server quota client
   config/             shared config resolution, validation, persistence
   daemon/             monitor + API + queue scheduler
-  desktop/            native Desktop delivery + Windows Stop automation
+  desktop/            native Desktop message delivery
   diagnostics/        doctor/dashboard health checks
   mcpserver/          MCP tools + action delivery
   observability/      structured runtime logging and log reader
   store/              SQLite persistence
   domain/             task/project/queue models
   quota/              policy
-  webui/              embedded dashboard, queue, diagnostics, Settings, Stop UI
+  webui/              embedded dashboard, queue, diagnostics, Settings
 .github/workflows/
   ci.yml
   release.yml
@@ -392,7 +368,6 @@ Legacy PowerShell scripts may remain in the source tree for development/migratio
 ## Docs
 
 - `docs/WINDOWS_SETUP.md` — Windows installation, upgrade, daemon lifecycle, configuration, and uninstall.
-- `docs/DESKTOP_STOP.md` — verified Windows Desktop Stop flow and safety rules.
 - `docs/TROUBLESHOOTING.md` — daemon, native delivery, and recovery diagnostics.
 - `docs/DIAGNOSTICS.md` — doctor v2 and system diagnostics dashboard.
 - `docs/LOGGING.md` — structured daemon/companion logs and `orch logs`.
@@ -402,4 +377,4 @@ Legacy PowerShell scripts may remain in the source tree for development/migratio
 
 Quota-driven pause remains cooperative at model/tool safe boundaries.
 
-Desktop Stop is Windows-only and depends on Codex Desktop's own visible Stop path. Quota Guard verifies whether the backend turn actually became `interrupted`, but it cannot force a Desktop-owned backend turn through a stable public hard-interrupt API when the current Codex Desktop build's own Stop behavior is broken. In that case the action is reported as uncertain / `NEEDS_REVIEW` instead of false success.
+v0.2.0 does not provide a Desktop hard-stop control. Quota Guard does not claim a stable external interrupt capability for Desktop-owned active turns; stop an active turn directly in Codex Desktop when needed.
