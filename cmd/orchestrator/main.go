@@ -182,7 +182,11 @@ func runDaemon(cfg config.Config) error {
 	defer cancel()
 	svc := daemon.NewService(cfg, st, log)
 	if err := svc.Recover(ctx); err != nil {
-		return fmt.Errorf("startup recovery: %w", err)
+		// Recovery only repairs actions already known to be unsafe to retry. If
+		// that bookkeeping fails, keep the daemon online so diagnostics/UI can
+		// explain and repair the state; never make Desktop autostart fail closed
+		// by exiting the whole process here.
+		log.Error("startup recovery failed; daemon will stay online and retry stale recovery later", "error", err)
 	}
 	go svc.RunMonitor(ctx)
 
