@@ -71,8 +71,25 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 		if err := enc.Encode(resp); err != nil {
 			return err
 		}
+
+		// task_complete can synchronously enqueue the next project action and
+		// move its queue row to DISPATCHING. Drain after the MCP response has
+		// been written, while this companion still owns a live Desktop native
+		// pipe. Waiting for the periodic ticker can lose this window because
+		// Codex may recycle the MCP companion as soon as the turn completes.
+		if isTaskCompleteRequest(req) {
+			s.deliverPending(ctx)
+		}
 	}
 	return scan.Err()
+}
+
+func isTaskCompleteRequest(req request) bool {
+	if req.Method != "tools/call" {
+		return false
+	}
+	var p callParams
+	return json.Unmarshal(req.Params, &p) == nil && p.Name == "task_complete"
 }
 
 func (s *Server) handle(ctx context.Context, req request) (any, error) {
@@ -85,7 +102,7 @@ func (s *Server) handle(ctx context.Context, req request) (any, error) {
 		if p.ProtocolVersion == "" {
 			p.ProtocolVersion = "2025-06-18"
 		}
-		return map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "desktop-quota-guard", "version": "0.2.0"}}, nil
+		return map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "desktop-quota-guard", "version": "0.2.3"}}, nil
 	case "tools/list":
 		return map[string]any{"tools": toolList()}, nil
 	case "tools/call":
@@ -178,7 +195,7 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 	case "desktop_guard_status":
 		q, d, err := s.daemon.quota(ctx)
 		if err != nil {
-			return toolError(err.Error()), nil
+			return toolError("Guard daemon unavailable: " + err.Error()), nil
 		}
 		relay, relayErr := desktop.LoadRelay(s.cfg.RelayPath())
 		var sender desktop.NativeSender
@@ -253,7 +270,16 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 }
 
 func (s *Server) actionPump(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.CompanionPollInterval())
+	// A companion can be short-lived when Codex recycles MCP processes between
+	// turns. Drain once immediately so durable pending actions do not have to
+	// survive until the first periodic tick.
+	s.deliverPending(ctx)
+
+	interval := s.cfg.CompanionPollInterval()
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -266,16 +292,23 @@ func (s *Server) actionPump(ctx context.Context) {
 }
 
 func (s *Server) deliverPending(ctx context.Context) {
+	actions, err := s.daemon.actions(ctx)
+	if err != nil {
+		s.log.Debug("list pending Desktop actions failed", "error", err)
+		return
+	}
+	if len(actions) == 0 {
+		return
+	}
+
 	relay, err := desktop.LoadRelay(s.cfg.RelayPath())
 	if err != nil {
+		s.log.Debug("pending Desktop actions blocked: relay unavailable", "count", len(actions), "error", err)
 		return
 	}
 	sender := desktop.NewNativeSender(relay.ExecutorThreadID)
 	if !sender.Available() {
-		return
-	}
-	actions, err := s.daemon.actions(ctx)
-	if err != nil {
+		s.log.Debug("pending Desktop actions blocked: native sender unavailable", "count", len(actions), "native", sender.Description())
 		return
 	}
 
@@ -290,9 +323,8 @@ func (s *Server) deliverPending(ctx context.Context) {
 			continue
 		}
 
-		// Claim atomically before the external side effect. For Stop actions the
-		// daemon also verifies that the expected turn is still the active tracked
-		// turn inside the same SQLite transaction.
+		// Claim atomically before the external side effect. If another pump won
+		// the race, this action is no longer pending and must not be sent twice.
 		if err := s.daemon.claim(ctx, action.ID); err != nil {
 			s.log.Debug("Desktop action already claimed or stale", "action", action.ID, "error", err)
 			continue
