@@ -42,10 +42,6 @@ func NewService(cfg config.Config, st *store.Store, log *slog.Logger) *Service {
 }
 
 func (s *Service) Recover(ctx context.Context) error {
-	// At process startup, every action still marked delivering belonged to the
-	// previous daemon process. Its Desktop outcome is unknowable, even if it was
-	// claimed only milliseconds before the crash. Recover it immediately instead
-	// of waiting for the periodic 60-second stale-delivery window.
 	recovered, err := s.store.RecoverInterruptedDeliveries(ctx)
 	if err != nil {
 		return fmt.Errorf("recover interrupted Desktop deliveries: %w", err)
@@ -177,10 +173,9 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 	}
 }
 
-// ReconcileProjectQueues starts at most one queued work item per AUTO project.
-// MANUAL projects wait for an explicit Start action and PAUSED projects do not
-// dispatch new work. The global AutoDispatch setting remains the master switch
-// for automatic advancement.
+// ReconcileProjectQueues sends at most one queued continuation per AUTO project.
+// Each queue item is bound to a specific existing Desktop task/thread when it is
+// created. It becomes eligible only when that selected task reaches COMPLETED.
 func (s *Service) ReconcileProjectQueues(ctx context.Context) {
 	if !s.cfg.AutoDispatch {
 		return
@@ -219,25 +214,25 @@ func (s *Service) ReconcileProjectQueues(ctx context.Context) {
 			s.log.Warn("read next queued project task failed", "project", p.ID, "error", err)
 			continue
 		}
-		threadID, err := s.store.ProjectDispatchThread(ctx, p.ID)
+		threadID, err := s.store.ProjectTaskDispatchThread(ctx, item.ID)
 		if err != nil {
-			// No completed Desktop thread yet, or the latest project task ended in
-			// a non-success terminal state. Keep the work item queued.
+			// The selected task is still running, missing, or not COMPLETED yet.
+			// Preserve queue order and keep this continuation queued.
 			continue
 		}
 		action, err := s.store.QueueProjectTaskDispatch(ctx, item.ID, threadID, queuedTaskMessage(p, item))
 		if err != nil {
-			s.log.Warn("queue project task dispatch failed", "project", p.ID, "projectTask", item.ID, "error", err)
+			s.log.Warn("queue project continuation dispatch failed", "project", p.ID, "projectTask", item.ID, "thread", threadID, "error", err)
 			continue
 		}
 		s.WakeDesktopDelivery()
-		s.log.Info("project task dispatch queued", "project", p.ID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
+		s.log.Info("project continuation dispatch queued", "project", p.ID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
 	}
 }
 
 func queuedTaskMessage(p domain.Project, item domain.ProjectTask) string {
 	var b strings.Builder
-	b.WriteString("[Codex Task Queue] The previous project task completed. Start the next queued task now.\n\n")
+	b.WriteString("[Codex Task Queue] Continue this existing Desktop task with the queued prompt below.\n\n")
 	b.WriteString("Project: ")
 	b.WriteString(p.Name)
 	b.WriteString("\nObjective: ")
@@ -246,7 +241,7 @@ func queuedTaskMessage(p domain.Project, item domain.ProjectTask) string {
 		b.WriteString("\n\nDetails:\n")
 		b.WriteString(item.Details)
 	}
-	b.WriteString("\n\nTreat this as a new managed task in the same project. Call desktop_quota_guard.desktop_task_register with this objective and the current workspace, then execute the work normally. When finished, call desktop_quota_guard.task_complete so the next queued task can start.")
+	b.WriteString("\n\nThis queue handoff is already registered for this Desktop thread. Do not call desktop_quota_guard.desktop_task_register for this queued continuation. Execute the work normally. When finished, call desktop_quota_guard.task_complete so the next queued continuation can run.")
 	return b.String()
 }
 
