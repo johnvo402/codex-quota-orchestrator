@@ -46,7 +46,6 @@ type callParams struct {
 }
 
 func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
-	go s.actionPump(ctx)
 	scan := bufio.NewScanner(in)
 	scan.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	enc := json.NewEncoder(out)
@@ -71,15 +70,6 @@ func (s *Server) Run(ctx context.Context, in io.Reader, out io.Writer) error {
 		if err := enc.Encode(resp); err != nil {
 			return err
 		}
-
-		// task_complete can synchronously enqueue the next project action and
-		// move its queue row to DISPATCHING. Drain after the MCP response has
-		// been written, while this companion still owns a live Desktop native
-		// pipe. Waiting for the periodic ticker can lose this window because
-		// Codex may recycle the MCP companion as soon as the turn completes.
-		if isTaskCompleteRequest(req) {
-			s.deliverPending(ctx)
-		}
 	}
 	return scan.Err()
 }
@@ -102,7 +92,7 @@ func (s *Server) handle(ctx context.Context, req request) (any, error) {
 		if p.ProtocolVersion == "" {
 			p.ProtocolVersion = "2025-06-18"
 		}
-		return map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "desktop-quota-guard", "version": "0.2.3"}}, nil
+		return map[string]any{"protocolVersion": p.ProtocolVersion, "capabilities": map[string]any{"tools": map[string]any{"listChanged": false}}, "serverInfo": map[string]any{"name": "desktop-quota-guard", "version": "0.2.6"}}, nil
 	case "tools/list":
 		return map[string]any{"tools": toolList()}, nil
 	case "tools/call":
@@ -269,10 +259,10 @@ func (s *Server) callTool(ctx context.Context, p callParams) (any, error) {
 	}
 }
 
+// actionPump is retained for compatibility tests and diagnostics, but Run no
+// longer starts it. Since v0.2.6 the long-lived daemon is the only process that
+// may claim and send durable Desktop actions.
 func (s *Server) actionPump(ctx context.Context) {
-	// A companion can be short-lived when Codex recycles MCP processes between
-	// turns. Drain once immediately so durable pending actions do not have to
-	// survive until the first periodic tick.
 	s.deliverPending(ctx)
 
 	interval := s.cfg.CompanionPollInterval()
@@ -313,8 +303,6 @@ func (s *Server) deliverPending(ctx context.Context) {
 	}
 
 	for _, action := range actions {
-		// Probe happens before claim. If Desktop is unavailable, the action stays
-		// pending and can be attempted safely on a later poll.
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		probeErr := sender.Probe(probeCtx)
 		cancel()
@@ -323,8 +311,6 @@ func (s *Server) deliverPending(ctx context.Context) {
 			continue
 		}
 
-		// Claim atomically before the external side effect. If another pump won
-		// the race, this action is no longer pending and must not be sent twice.
 		if err := s.daemon.claim(ctx, action.ID); err != nil {
 			s.log.Debug("Desktop action already claimed or stale", "action", action.ID, "error", err)
 			continue
