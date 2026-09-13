@@ -85,10 +85,11 @@ func (c *daemonClient) quota(ctx context.Context) (quota.Snapshot, quota.Decisio
 	return out.Quota, out.Decision, err
 }
 
-func (c *daemonClient) actions(ctx context.Context) ([]store.Action, error) {
-	var out []store.Action
-	err := c.do(ctx, "GET", "/v1/actions", nil, &out)
-	return out, err
+func (c *daemonClient) actions(context.Context) ([]store.Action, error) {
+	// Since v0.2.6 the long-lived daemon is the only outbound delivery owner.
+	// Keeping transient MCP companions out of the claim/send path prevents a
+	// companion recycle from stranding an action in DISPATCHING/delivering.
+	return []store.Action{}, nil
 }
 
 func (c *daemonClient) claim(ctx context.Context, id int64) error {
