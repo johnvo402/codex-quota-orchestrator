@@ -8,10 +8,11 @@ import (
 )
 
 type projectTaskReq struct {
-	ProjectID string `json:"projectId"`
-	Objective string `json:"objective"`
-	Details   string `json:"details"`
-	Position  *int64 `json:"position"`
+	ProjectID    string `json:"projectId"`
+	TargetTaskID string `json:"targetTaskId"`
+	Objective    string `json:"objective"`
+	Details      string `json:"details"`
+	Position     *int64 `json:"position"`
 }
 
 type projectTaskReorderReq struct {
@@ -39,7 +40,11 @@ func (s *Server) projectTasks(w http.ResponseWriter, r *http.Request) {
 			httpErr(w, http.StatusBadRequest, errors.New("projectId required"))
 			return
 		}
-		item, err := s.store.CreateProjectTask(r.Context(), v.ProjectID, v.Objective, v.Details)
+		if strings.TrimSpace(v.TargetTaskID) == "" {
+			httpErr(w, http.StatusBadRequest, errors.New("targetTaskId required"))
+			return
+		}
+		item, err := s.store.CreateProjectTaskForTask(r.Context(), v.ProjectID, v.TargetTaskID, v.Objective, v.Details)
 		if err != nil {
 			httpErr(w, http.StatusBadRequest, err)
 			return
@@ -138,6 +143,12 @@ func (s *Server) projectTaskRoute(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			httpErr(w, http.StatusBadRequest, err)
 			return
+		}
+		if strings.TrimSpace(v.TargetTaskID) != "" {
+			if _, err := s.store.SetQueuedProjectTaskTarget(r.Context(), id, v.TargetTaskID); err != nil {
+				httpErr(w, http.StatusConflict, err)
+				return
+			}
 		}
 		item, err := s.store.UpdateProjectTask(r.Context(), id, v.Objective, v.Details, v.Position)
 		if err != nil {
