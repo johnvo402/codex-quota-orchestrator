@@ -19,7 +19,7 @@ type fakeNativeSender struct {
 	sends   int
 }
 
-func (f *fakeNativeSender) Available() bool { return true }
+func (f *fakeNativeSender) Available() bool     { return true }
 func (f *fakeNativeSender) Description() string { return "fake native sender" }
 func (f *fakeNativeSender) Diagnostics() desktop.NativeDiagnostics {
 	return desktop.NativeDiagnostics{Available: true, Source: "test", ExecutorConfigured: true}
