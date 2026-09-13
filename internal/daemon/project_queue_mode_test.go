@@ -34,7 +34,7 @@ func setupQueueModeTest(t *testing.T) (*store.Store, *Service, domain.Project, d
 	if _, err := st.Transition(ctx, "thread-1", domain.StateCompleted, "done"); err != nil {
 		t.Fatal(err)
 	}
-	item, err := st.CreateProjectTask(ctx, p.ID, "next task", "")
+	item, err := st.CreateProjectTaskForTask(ctx, p.ID, managed.ID, "next task", "")
 	if err != nil {
 		t.Fatal(err)
 	}

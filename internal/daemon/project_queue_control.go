@@ -11,7 +11,7 @@ import (
 
 // StartProjectQueueItem manually dispatches the next queued item for a project.
 // It bypasses only automatic-dispatch policy; quota, ordering, project blocking,
-// and active managed-task safety checks remain mandatory.
+// selected-task completion, and active managed-task safety checks remain mandatory.
 func (s *Service) StartProjectQueueItem(ctx context.Context, itemID string) (domain.ProjectTask, error) {
 	item, err := s.store.GetProjectTask(ctx, itemID)
 	if err != nil {
@@ -67,7 +67,7 @@ func (s *Service) StartProjectQueueItem(ctx context.Context, itemID string) (dom
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
-	threadID, err := s.store.ProjectDispatchThread(ctx, item.ProjectID)
+	threadID, err := s.store.ProjectTaskDispatchThread(ctx, item.ID)
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
@@ -79,8 +79,9 @@ func (s *Service) StartProjectQueueItem(ctx context.Context, itemID string) (dom
 }
 
 // RetryProjectQueueItem retries a NEEDS_REVIEW dispatch only after the user has
-// verified that the previous uncertain Desktop delivery did not arrive. The
-// retry is still subject to quota, queue-mode, and one-active-task safeguards.
+// verified that the previous uncertain Desktop delivery did not arrive. It is
+// always retried on the same selected task/thread and only while that task is
+// still COMPLETED.
 func (s *Service) RetryProjectQueueItem(ctx context.Context, itemID string) (domain.ProjectTask, error) {
 	item, err := s.store.GetProjectTask(ctx, itemID)
 	if err != nil {
@@ -125,19 +126,19 @@ func (s *Service) RetryProjectQueueItem(ctx context.Context, itemID string) (dom
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
-	threadID, err := s.store.ProjectDispatchThread(ctx, item.ProjectID)
+	threadID, err := s.store.ProjectTaskDispatchThread(ctx, item.ID)
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
 	if item.TargetThreadID != "" && item.TargetThreadID != threadID {
-		return domain.ProjectTask{}, errors.New("project Desktop thread changed since the uncertain delivery; review the project before retrying")
+		return domain.ProjectTask{}, errors.New("selected Desktop thread changed since the uncertain delivery; review the queue item before retrying")
 	}
 	action, err := s.store.RetryProjectTaskDispatch(ctx, item.ID, threadID, queuedTaskMessage(p, item))
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
 	s.WakeDesktopDelivery()
-	s.log.Info("project task recovery delivery queued", "project", item.ProjectID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
+	s.log.Info("project continuation recovery delivery queued", "project", item.ProjectID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
 	return s.store.GetProjectTask(ctx, item.ID)
 }
 
@@ -163,6 +164,6 @@ func (s *Service) ConfirmProjectQueueItemRunning(ctx context.Context, itemID str
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
-	s.log.Info("project task recovery confirmed running", "project", item.ProjectID, "projectTask", item.ID, "thread", updated.TargetThreadID)
+	s.log.Info("project continuation recovery confirmed running", "project", item.ProjectID, "projectTask", item.ID, "thread", updated.TargetThreadID)
 	return updated, nil
 }
