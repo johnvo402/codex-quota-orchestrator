@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,10 +14,28 @@ import (
 
 const desktopDeliveryPollInterval = time.Second
 
-var newDesktopNativeSender = desktop.NewNativeSender
+var newDesktopNativeSenderForPipe = desktop.NewNativeSenderForPipe
 
 type deliveryRuntime struct {
 	wake chan struct{}
+	mu   sync.RWMutex
+	pipe string
+}
+
+func (r *deliveryRuntime) setPipe(pipe string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.pipe == pipe {
+		return false
+	}
+	r.pipe = pipe
+	return true
+}
+
+func (r *deliveryRuntime) currentPipe() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.pipe
 }
 
 var deliveryRuntimes sync.Map
@@ -45,14 +62,13 @@ func (s *Service) RegisterDesktopNativePipe(raw string) error {
 		return fmt.Errorf("Desktop native pipe must be local: %q", pipe)
 	}
 
-	// NewNativeSender prefers CODEX_APP_TOOLS_PIPE_PATH, so update both the
-	// normal Desktop variable and the explicit guard override. This only changes
-	// the daemon process environment; it never mutates Codex Desktop itself.
-	if err := os.Setenv("CODEX_APP_TOOLS_PIPE_PATH", pipe); err != nil {
-		return err
-	}
-	if err := os.Setenv("CDQG_DESKTOP_NATIVE_PIPE", pipe); err != nil {
-		return err
+	// Keep the Desktop session's native pipe as daemon runtime state. Do not put
+	// it in the daemon environment and do not rediscover it from daemon ancestry:
+	// the daemon is intentionally detached from Codex Desktop (usually Explorer
+	// is its parent), so ancestry discovery can never be authoritative here.
+	runtime := deliveryRuntimeForService(s)
+	if runtime.setPipe(pipe) {
+		s.log.Info("Codex Desktop native pipe registered for daemon delivery")
 	}
 	s.WakeDesktopDelivery()
 	return nil
@@ -129,14 +145,26 @@ func (s *Service) drainDesktopActions(ctx context.Context) {
 			continue
 		}
 
+		// Only the companion is allowed to discover the Codex Desktop native
+		// pipe. If no current companion has registered one yet, keep the action
+		// pending and wait for the next heartbeat. In particular, never call the
+		// generic NewNativeSender here: its Windows fallback walks parent command
+		// lines with PowerShell, which is wrong for a detached daemon and used to
+		// flash a terminal every delivery poll while DISPATCHING was stuck.
+		pipe := deliveryRuntimeForService(s).currentPipe()
+		if pipe == "" {
+			s.log.Debug("pending Desktop actions waiting for companion native pipe registration", "count", len(deliverable))
+			return
+		}
+
 		relay, err := desktop.LoadRelay(s.cfg.RelayPath())
 		if err != nil {
 			s.log.Debug("pending Desktop actions blocked: relay unavailable", "count", len(deliverable), "error", err)
 			return
 		}
-		sender := newDesktopNativeSender(relay.ExecutorThreadID)
+		sender := newDesktopNativeSenderForPipe(relay.ExecutorThreadID, pipe)
 		if !sender.Available() {
-			s.log.Debug("pending Desktop actions blocked: native sender unavailable", "count", len(deliverable), "native", sender.Description())
+			s.log.Debug("pending Desktop actions blocked: registered native sender unavailable", "count", len(deliverable), "native", sender.Description())
 			return
 		}
 
