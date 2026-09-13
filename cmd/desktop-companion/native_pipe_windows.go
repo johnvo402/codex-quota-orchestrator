@@ -14,8 +14,6 @@ import (
 	"syscall"
 )
 
-const createNoWindow = 0x08000000
-
 type companionParentProcess struct {
 	ProcessID       int    `json:"ProcessId"`
 	ParentProcessID int    `json:"ParentProcessId"`
