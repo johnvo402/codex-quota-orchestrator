@@ -7,6 +7,8 @@ import (
 
 const companionNativePipeRetryInterval = 5 * time.Second
 
+var resolveCompanionNativePipeFn = resolveCompanionNativePipe
+
 var companionNativePipeCache struct {
 	sync.Mutex
 	pipe        string
@@ -33,7 +35,7 @@ func companionNativePipePath() string {
 	// Cache only a successful resolution. v0.2.6 used sync.Once, so one early
 	// miss during Desktop/MCP startup permanently prevented the daemon from ever
 	// receiving a pipe and left project work stuck in DISPATCHING.
-	pipe := resolveCompanionNativePipe()
+	pipe := resolveCompanionNativePipeFn()
 
 	companionNativePipeCache.Lock()
 	companionNativePipeCache.resolving = false
