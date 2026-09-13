@@ -53,10 +53,16 @@ func (s *Service) Recover(ctx context.Context) error {
 	if recovered > 0 {
 		s.log.Warn("interrupted Desktop deliveries moved to NEEDS_REVIEW", "count", recovered)
 	}
+	if repaired, err := s.store.ReconcileProjectTaskDispatches(ctx); err != nil {
+		return fmt.Errorf("reconcile project dispatch state: %w", err)
+	} else if repaired > 0 {
+		s.log.Warn("orphaned project dispatch states reconciled during startup", "count", repaired)
+	}
 	return nil
 }
 
 func (s *Service) RunMonitor(ctx context.Context) {
+	go s.RunDeliveryWorker(ctx)
 	s.refreshAndReconcile(ctx)
 	ticker := time.NewTicker(s.cfg.PollInterval())
 	defer ticker.Stop()
@@ -73,6 +79,11 @@ func (s *Service) RunMonitor(ctx context.Context) {
 func (s *Service) refreshAndReconcile(ctx context.Context) {
 	if _, err := s.store.RecoverStaleDeliveries(ctx, time.Now().UTC().Add(-60*time.Second)); err != nil {
 		s.log.Warn("stale Desktop delivery recovery failed", "error", err)
+	}
+	if repaired, err := s.store.ReconcileProjectTaskDispatches(ctx); err != nil {
+		s.log.Warn("project dispatch reconciliation failed", "error", err)
+	} else if repaired > 0 {
+		s.log.Warn("orphaned project dispatch states reconciled", "count", repaired)
 	}
 
 	snap, err := s.readQuota(ctx)
@@ -126,6 +137,7 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 				s.log.Error("queue Desktop pause notice", "thread", t.ThreadID, "error", err)
 				continue
 			}
+			s.WakeDesktopDelivery()
 			s.log.Warn("cooperative quota pause requested", "thread", t.ThreadID, "actionId", action.ID, "reason", reason)
 		}
 		return
@@ -157,6 +169,7 @@ func (s *Service) refreshAndReconcile(ctx context.Context) {
 				s.log.Error("queue Desktop resume", "thread", t.ThreadID, "error", err)
 				continue
 			}
+			s.WakeDesktopDelivery()
 			s.log.Info("Desktop resume queued", "thread", t.ThreadID, "actionId", action.ID, "fiveHourRemaining", snap.FiveHour.RemainingPercent, "weeklyRemaining", snap.Weekly.RemainingPercent)
 		}
 
@@ -217,6 +230,7 @@ func (s *Service) ReconcileProjectQueues(ctx context.Context) {
 			s.log.Warn("queue project task dispatch failed", "project", p.ID, "projectTask", item.ID, "error", err)
 			continue
 		}
+		s.WakeDesktopDelivery()
 		s.log.Info("project task dispatch queued", "project", p.ID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
 	}
 }

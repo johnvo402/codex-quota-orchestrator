@@ -20,9 +20,10 @@ const systemControlHeader = "X-CDQG-Control"
 const restartControlHeader = systemControlHeader
 
 const (
-	companionIDHeader      = "X-CDQG-Companion-ID"
-	companionStateHeader   = "X-CDQG-Companion-State"
-	companionHostPIDHeader = "X-CDQG-Desktop-Host-PID"
+	companionIDHeader         = "X-CDQG-Companion-ID"
+	companionStateHeader      = "X-CDQG-Companion-State"
+	companionHostPIDHeader    = "X-CDQG-Desktop-Host-PID"
+	companionNativePipeHeader = "X-CDQG-Desktop-Native-Pipe"
 )
 
 var launchRestartChildFn = launchRestartChild
@@ -133,6 +134,13 @@ func (s *Server) handleCompanionLifecycle(w http.ResponseWriter, r *http.Request
 	registry := registryForServer(s)
 	switch stateName {
 	case "heartbeat":
+		if rawPipe := strings.TrimSpace(r.Header.Get(companionNativePipeHeader)); rawPipe != "" {
+			if err := s.service.RegisterDesktopNativePipe(rawPipe); err != nil {
+				s.log.Warn("ignoring invalid Codex Desktop native pipe from companion", "error", err)
+			}
+		}
+		s.service.WakeDesktopDelivery()
+
 		now := time.Now().UTC()
 		registry.mu.Lock()
 		registry.seen = true

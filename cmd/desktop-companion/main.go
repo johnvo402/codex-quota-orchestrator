@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	systemControlHeader  = "X-CDQG-Control"
-	companionIDHeader    = "X-CDQG-Companion-ID"
-	companionStateHeader = "X-CDQG-Companion-State"
+	systemControlHeader       = "X-CDQG-Control"
+	companionIDHeader         = "X-CDQG-Companion-ID"
+	companionStateHeader      = "X-CDQG-Companion-State"
+	companionNativePipeHeader = "X-CDQG-Desktop-Native-Pipe"
 )
 
 func main() {
@@ -110,6 +111,9 @@ func signalCompanion(ctx context.Context, cfg config.Config, instanceID, state s
 	req.Header.Set(companionIDHeader, instanceID)
 	req.Header.Set(companionStateHeader, state)
 	applyDesktopHostHeader(req)
+	if pipe := companionNativePipePath(); pipe != "" {
+		req.Header.Set(companionNativePipeHeader, pipe)
+	}
 
 	client := &http.Client{Timeout: 1200 * time.Millisecond}
 	resp, err := client.Do(req)
