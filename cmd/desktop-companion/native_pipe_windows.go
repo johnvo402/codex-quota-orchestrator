@@ -111,7 +111,7 @@ func companionParentProcesses(startPID, maxDepth int) []companionParentProcess {
 	}
 	cmd := exec.Command(shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
-		HideWindow:     true,
+		HideWindow:    true,
 		CreationFlags: createNoWindow,
 	}
 	out, err := cmd.Output()
