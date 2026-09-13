@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 type RelayConfig struct {
@@ -57,6 +58,38 @@ type NativeSender interface {
 }
 
 func NewNativeSender(executorThreadID string) NativeSender {
+	return newPlatformNativeSender(executorThreadID)
+}
+
+var explicitNativePipeMu sync.Mutex
+
+// NewNativeSenderForPipe creates a sender from a pipe that was already resolved
+// by the Codex Desktop companion. Unlike NewNativeSender, this path must never
+// inspect the daemon's process ancestry: the daemon is deliberately detached
+// from Codex Desktop, so ancestry discovery there is both wrong and expensive.
+func NewNativeSenderForPipe(executorThreadID, pipe string) NativeSender {
+	explicitNativePipeMu.Lock()
+	defer explicitNativePipeMu.Unlock()
+
+	const primary = "CODEX_APP_TOOLS_PIPE_PATH"
+	const override = "CDQG_DESKTOP_NATIVE_PIPE"
+	oldPrimary, hadPrimary := os.LookupEnv(primary)
+	oldOverride, hadOverride := os.LookupEnv(override)
+	_ = os.Setenv(primary, pipe)
+	_ = os.Setenv(override, pipe)
+	defer func() {
+		if hadPrimary {
+			_ = os.Setenv(primary, oldPrimary)
+		} else {
+			_ = os.Unsetenv(primary)
+		}
+		if hadOverride {
+			_ = os.Setenv(override, oldOverride)
+		} else {
+			_ = os.Unsetenv(override)
+		}
+	}()
+
 	return newPlatformNativeSender(executorThreadID)
 }
 

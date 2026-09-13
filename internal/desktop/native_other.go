@@ -10,7 +10,10 @@ import (
 type unsupportedNativeSender struct{}
 
 func newPlatformNativeSender(string) NativeSender { return unsupportedNativeSender{} }
-func (unsupportedNativeSender) Available() bool   { return false }
+func newPlatformNativeSenderForPipe(string, string) NativeSender {
+	return unsupportedNativeSender{}
+}
+func (unsupportedNativeSender) Available() bool { return false }
 func (unsupportedNativeSender) Description() string {
 	return "Desktop native relay in this MVP is Windows-only"
 }

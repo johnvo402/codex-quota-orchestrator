@@ -74,17 +74,33 @@ func setupDaemonDeliveryTest(t *testing.T) (config.Config, *store.Store, domain.
 	return cfg, st, item, action
 }
 
+func installDeliveryFactory(t *testing.T, fake desktop.NativeSender) *string {
+	t.Helper()
+	oldFactory := newDesktopNativeSenderForPipe
+	var gotPipe string
+	newDesktopNativeSenderForPipe = func(_ string, pipe string) desktop.NativeSender {
+		gotPipe = pipe
+		return fake
+	}
+	t.Cleanup(func() { newDesktopNativeSenderForPipe = oldFactory })
+	return &gotPipe
+}
+
 func TestDaemonDeliveryWorkerCompletesPendingProjectDispatch(t *testing.T) {
 	cfg, st, item, action := setupDaemonDeliveryTest(t)
 	defer st.Close()
 	fake := &fakeNativeSender{}
-	oldFactory := newDesktopNativeSender
-	newDesktopNativeSender = func(string) desktop.NativeSender { return fake }
-	defer func() { newDesktopNativeSender = oldFactory }()
+	gotPipe := installDeliveryFactory(t, fake)
 
 	svc := NewService(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := svc.RegisterDesktopNativePipe(`\\.\pipe\cdqg-test`); err != nil {
+		t.Fatal(err)
+	}
 	svc.drainDesktopActions(context.Background())
 
+	if *gotPipe != `\\.\pipe\cdqg-test` {
+		t.Fatalf("registered pipe=%q", *gotPipe)
+	}
 	if fake.sends != 1 {
 		t.Fatalf("send count=%d want=1", fake.sends)
 	}
@@ -104,15 +120,49 @@ func TestDaemonDeliveryWorkerCompletesPendingProjectDispatch(t *testing.T) {
 	}
 }
 
+func TestDaemonDeliveryWorkerWaitsForRegisteredPipeWithoutConstructingSender(t *testing.T) {
+	cfg, st, item, action := setupDaemonDeliveryTest(t)
+	defer st.Close()
+	oldFactory := newDesktopNativeSenderForPipe
+	constructed := 0
+	newDesktopNativeSenderForPipe = func(string, string) desktop.NativeSender {
+		constructed++
+		return &fakeNativeSender{}
+	}
+	defer func() { newDesktopNativeSenderForPipe = oldFactory }()
+
+	svc := NewService(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	svc.drainDesktopActions(context.Background())
+
+	if constructed != 0 {
+		t.Fatalf("explicit sender constructed %d times without registered pipe", constructed)
+	}
+	status, err := st.GetActionStatus(context.Background(), action.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != "pending" {
+		t.Fatalf("action status=%s want=pending", status.Status)
+	}
+	got, err := st.GetProjectTask(context.Background(), item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != domain.ProjectTaskDispatching {
+		t.Fatalf("project task state=%s want=DISPATCHING", got.State)
+	}
+}
+
 func TestDaemonDeliveryWorkerMarksUncertainSendForReview(t *testing.T) {
 	cfg, st, item, action := setupDaemonDeliveryTest(t)
 	defer st.Close()
 	fake := &fakeNativeSender{sendErr: errors.New("pipe response lost")}
-	oldFactory := newDesktopNativeSender
-	newDesktopNativeSender = func(string) desktop.NativeSender { return fake }
-	defer func() { newDesktopNativeSender = oldFactory }()
+	installDeliveryFactory(t, fake)
 
 	svc := NewService(cfg, st, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := svc.RegisterDesktopNativePipe(`\\.\pipe\cdqg-test`); err != nil {
+		t.Fatal(err)
+	}
 	svc.drainDesktopActions(context.Background())
 
 	if fake.sends != 1 {
