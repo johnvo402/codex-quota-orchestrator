@@ -74,6 +74,7 @@ func (s *Service) StartProjectQueueItem(ctx context.Context, itemID string) (dom
 	if _, err := s.store.QueueProjectTaskDispatch(ctx, item.ID, threadID, queuedTaskMessage(p, item)); err != nil {
 		return domain.ProjectTask{}, err
 	}
+	s.WakeDesktopDelivery()
 	return s.store.GetProjectTask(ctx, item.ID)
 }
 
@@ -135,6 +136,7 @@ func (s *Service) RetryProjectQueueItem(ctx context.Context, itemID string) (dom
 	if err != nil {
 		return domain.ProjectTask{}, err
 	}
+	s.WakeDesktopDelivery()
 	s.log.Info("project task recovery delivery queued", "project", item.ProjectID, "projectTask", item.ID, "thread", threadID, "actionId", action.ID)
 	return s.store.GetProjectTask(ctx, item.ID)
 }
