@@ -60,6 +60,14 @@ func NewNativeSender(executorThreadID string) NativeSender {
 	return newPlatformNativeSender(executorThreadID)
 }
 
+// NewNativeSenderForPipe creates a sender from a pipe that was already resolved
+// by the Codex Desktop companion. Unlike NewNativeSender, it must not inspect
+// the current process ancestry. The long-lived daemon is intentionally detached
+// from Codex Desktop, so ancestry discovery there is both wrong and expensive.
+func NewNativeSenderForPipe(executorThreadID, pipe string) NativeSender {
+	return newPlatformNativeSenderForPipe(executorThreadID, pipe)
+}
+
 func nativeRequest(executor, target, message string, id string) map[string]any {
 	return map[string]any{
 		"jsonrpc": "2.0", "id": 1, "method": "tools/call",
